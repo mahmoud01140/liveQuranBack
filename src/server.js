@@ -41,10 +41,36 @@ import ijazahRoutes from './routes/ijazah.routes.js';
 
 
 // Parse allowed origins (supports comma-separated CLIENT_URL for multiple domains)
-const parseOrigins = () => {
+const getAllowedOrigins = () => {
   const raw = process.env.CLIENT_URL || 'http://localhost:5173';
-  const origins = raw.split(',').map(o => o.trim()).filter(Boolean);
-  return origins.length === 1 ? origins[0] : origins;
+  return raw
+    .split(',')
+    .map(o => o.trim().replace(/\/+$/, ''))
+    .filter(Boolean);
+};
+
+const corsOptions = {
+  origin: (origin, callback) => {
+    // Allow requests with no origin (mobile apps, server-to-server, curl)
+    if (!origin) return callback(null, true);
+
+    const allowedOrigins = getAllowedOrigins();
+    const isAllowed = allowedOrigins.some(allowed => {
+      if (allowed === '*' || allowed === origin) return true;
+      // Allow any vercel preview deployment if a vercel domain is in allowed origins
+      if (origin.endsWith('.vercel.app') && allowed.includes('vercel.app')) return true;
+      return false;
+    });
+
+    if (isAllowed) {
+      return callback(null, true);
+    }
+    console.warn(`⚠️ CORS blocked request from origin: ${origin}. Allowed origins:`, allowedOrigins);
+    return callback(new Error(`CORS blocked for origin: ${origin}`));
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
 };
 
 const __filename = fileURLToPath(import.meta.url);
@@ -53,10 +79,23 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const server = http.createServer(app);
 
+// CORS must be at the very top
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
+
 // Initialize Socket.io
 const io = new Server(server, {
   cors: {
-    origin: parseOrigins(),
+    origin: (origin, callback) => {
+      if (!origin) return callback(null, true);
+      const allowedOrigins = getAllowedOrigins();
+      const isAllowed = allowedOrigins.some(allowed => {
+        if (allowed === '*' || allowed === origin) return true;
+        if (origin.endsWith('.vercel.app') && allowed.includes('vercel.app')) return true;
+        return false;
+      });
+      callback(null, isAllowed);
+    },
     methods: ['GET', 'POST'],
     credentials: true,
   },
@@ -68,8 +107,8 @@ const io = new Server(server, {
 app.set('io', io);
 initSocket(io);
 
-// Connect to MongoDB
-connectDB();
+// Security middleware
+app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 
 // Ensure MongoDB connection in Serverless environments
 app.use(async (req, res, next) => {
@@ -80,9 +119,6 @@ app.use(async (req, res, next) => {
     next(err);
   }
 });
-
-// Security middleware
-app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 
 // Rate limiting
 const limiter = rateLimit({
@@ -101,14 +137,6 @@ const authLimiter = rateLimit({
   message: { message: 'Too many auth attempts, please try again later.' },
 });
 app.use('/api/auth/', authLimiter);
-
-// CORS
-app.use(
-  cors({
-    origin: parseOrigins(),
-    credentials: true,
-  })
-);
 
 // Body parsing (skip for stripe webhook)
 app.use('/api/payments/webhook', express.raw({ type: 'application/json' }));
