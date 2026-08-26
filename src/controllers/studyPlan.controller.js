@@ -1,0 +1,191 @@
+import StudyPlan from '../models/StudyPlan.js';
+import Group from '../models/Group.js';
+import Curriculum from '../models/Curriculum.js';
+import User from '../models/User.js';
+
+// ─── Helper: get or create group plan ────────────────────────────────────────
+const getOrCreateGroupPlan = async (groupId) => {
+  let plan = await StudyPlan.findOne({ group: groupId, type: 'group' });
+  if (!plan) plan = await StudyPlan.create({ group: groupId, type: 'group' });
+  return plan;
+};
+
+// GET /api/study-plans/group/:groupId
+export const getGroupPlan = async (req, res) => {
+  try {
+    const plan = await StudyPlan.findOne({ group: req.params.groupId, type: 'group' })
+      .populate('curriculum', 'title level description units estimatedWeeks');
+    res.json({ plan });
+  } catch (error) {
+    res.status(500).json({ message: 'خطأ' });
+  }
+};
+
+// POST /api/study-plans/group/:groupId  (create or update the plan)
+export const createGroupPlan = async (req, res) => {
+  try {
+    const existing = await StudyPlan.findOne({ group: req.params.groupId, type: 'group' });
+    if (existing) {
+      const plan = await StudyPlan.findByIdAndUpdate(existing._id, req.body, { new: true })
+        .populate('curriculum', 'title level description units estimatedWeeks');
+      return res.json({ plan });
+    }
+    const plan = await StudyPlan.create({ ...req.body, group: req.params.groupId, type: 'group' });
+    res.status(201).json({ plan });
+  } catch (error) {
+    res.status(500).json({ message: 'خطأ في إنشاء الخطة' });
+  }
+};
+
+// PUT /api/study-plans/group/:groupId/curriculum  — assign a base curriculum to the group plan
+export const assignCurriculumToGroup = async (req, res) => {
+  try {
+    const { curriculumId } = req.body;
+    const plan = await getOrCreateGroupPlan(req.params.groupId);
+
+    // Update the plan's curriculum ref
+    plan.curriculum = curriculumId || null;
+    await plan.save();
+
+    // Also update the Group.curriculum ref for quick access
+    await Group.findByIdAndUpdate(req.params.groupId, { curriculum: curriculumId || null, studyPlan: plan._id });
+
+    const updated = await StudyPlan.findById(plan._id)
+      .populate('curriculum', 'title level description units estimatedWeeks');
+
+    res.json({ message: 'تم تعيين المنهج للمجموعة', plan: updated });
+  } catch (error) {
+    res.status(500).json({ message: 'خطأ في تعيين المنهج' });
+  }
+};
+
+// POST /api/study-plans/group/:groupId/lessons  — add a custom lesson
+export const addCustomLesson = async (req, res) => {
+  try {
+    const plan = await getOrCreateGroupPlan(req.params.groupId);
+    const { title, description, type, duration, isLiveRequired, resources } = req.body;
+
+    const lessonNumber = (plan.customLessons.length || 0) + 1;
+    const lesson = { title, description, type, duration, isLiveRequired, resources, lessonNumber, order: lessonNumber };
+
+    plan.customLessons.push(lesson);
+    await plan.save();
+
+    // Link study plan to group
+    await Group.findByIdAndUpdate(req.params.groupId, { studyPlan: plan._id });
+
+    const updated = await StudyPlan.findById(plan._id)
+      .populate('curriculum', 'title level description units estimatedWeeks');
+    res.status(201).json({ message: 'تم إضافة الدرس', plan: updated });
+  } catch (error) {
+    res.status(500).json({ message: 'خطأ في إضافة الدرس' });
+  }
+};
+
+// PUT /api/study-plans/group/:groupId/lessons/:lessonId  — edit a custom lesson
+export const updateCustomLesson = async (req, res) => {
+  try {
+    const plan = await StudyPlan.findOne({ group: req.params.groupId, type: 'group' });
+    if (!plan) return res.status(404).json({ message: 'الخطة غير موجودة' });
+
+    const lesson = plan.customLessons.id(req.params.lessonId);
+    if (!lesson) return res.status(404).json({ message: 'الدرس غير موجود' });
+
+    Object.assign(lesson, req.body);
+    await plan.save();
+
+    const updated = await StudyPlan.findById(plan._id)
+      .populate('curriculum', 'title level description units estimatedWeeks');
+    res.json({ message: 'تم تعديل الدرس', plan: updated });
+  } catch (error) {
+    res.status(500).json({ message: 'خطأ في تعديل الدرس' });
+  }
+};
+
+// DELETE /api/study-plans/group/:groupId/lessons/:lessonId
+export const deleteCustomLesson = async (req, res) => {
+  try {
+    const plan = await StudyPlan.findOne({ group: req.params.groupId, type: 'group' });
+    if (!plan) return res.status(404).json({ message: 'الخطة غير موجودة' });
+
+    plan.customLessons = plan.customLessons.filter(l => l._id.toString() !== req.params.lessonId);
+    // Re-number
+    plan.customLessons.forEach((l, i) => { l.lessonNumber = i + 1; l.order = i + 1; });
+    await plan.save();
+
+    const updated = await StudyPlan.findById(plan._id)
+      .populate('curriculum', 'title level description units estimatedWeeks');
+    res.json({ message: 'تم حذف الدرس', plan: updated });
+  } catch (error) {
+    res.status(500).json({ message: 'خطأ في حذف الدرس' });
+  }
+};
+
+// GET /api/study-plans/group/:groupId/full  — curriculum + custom lessons (for student page)
+export const getGroupFullPlan = async (req, res) => {
+  try {
+    const plan = await StudyPlan.findOne({ group: req.params.groupId, type: 'group' })
+      .populate('curriculum', 'title level description units estimatedWeeks');
+    res.json({ plan: plan || null });
+  } catch (error) {
+    res.status(500).json({ message: 'خطأ' });
+  }
+};
+
+// ─── Student individual plan handlers (unchanged) ─────────────────────────────
+export const getStudentPlan = async (req, res) => {
+  try {
+    const plan = await StudyPlan.findOne({ student: req.params.studentId, type: 'individual' });
+    res.json({ plan });
+  } catch (error) {
+    res.status(500).json({ message: 'خطأ' });
+  }
+};
+
+export const createStudentPlan = async (req, res) => {
+  try {
+    const existing = await StudyPlan.findOne({ student: req.params.studentId, type: 'individual' });
+    if (existing) {
+      const plan = await StudyPlan.findByIdAndUpdate(existing._id, req.body, { new: true });
+      return res.json({ plan });
+    }
+    const plan = await StudyPlan.create({ ...req.body, student: req.params.studentId, type: 'individual' });
+    res.status(201).json({ plan });
+  } catch (error) {
+    res.status(500).json({ message: 'خطأ في إنشاء الخطة' });
+  }
+};
+
+export const updateQuranProgress = async (req, res) => {
+  try {
+    const { currentJuz, completedJuz, dailyPages, dailyVerses } = req.body;
+    const plan = await StudyPlan.findOneAndUpdate(
+      { student: req.params.studentId },
+      {
+        'quranCompletionPlan.currentJuz': currentJuz,
+        'quranCompletionPlan.completedJuz': completedJuz,
+        'quranCompletionPlan.dailyPages': dailyPages,
+        'quranCompletionPlan.dailyVerses': dailyVerses,
+      },
+      { new: true }
+    );
+    await User.findByIdAndUpdate(req.params.studentId, { memorizedVerses: (currentJuz - 1) * 604 + 20 });
+    res.json({ plan });
+  } catch (error) {
+    res.status(500).json({ message: 'خطأ' });
+  }
+};
+
+export const updateParentApproval = async (req, res) => {
+  try {
+    const { parentName, parentContact, notes } = req.body;
+    const plan = await StudyPlan.findOneAndUpdate(
+      { student: req.params.studentId },
+      { parentApproval: { parentName, parentContact, approvedAt: new Date(), notes } },
+      { new: true }
+    );
+    res.json({ message: 'تم تسجيل موافقة ولي الأمر', plan });
+  } catch (error) {
+    res.status(500).json({ message: 'خطأ' });
+  }
+};
