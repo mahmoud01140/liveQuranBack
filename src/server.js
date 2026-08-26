@@ -16,6 +16,7 @@ import { fileURLToPath } from 'url';
 import connectDB from './config/db.js';
 import { initSocket } from './config/socket.js';
 import { protect } from './middleware/auth.middleware.js';
+import { uploadDir } from './middleware/upload.middleware.js';
 
 // Routes
 import authRoutes from './routes/auth.routes.js';
@@ -145,7 +146,7 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(cookieParser());
 
 // Static files (uploads) — protected: require auth, serve via sendFile
-app.use('/uploads', protect, express.static(path.join(__dirname, '..', 'uploads'), {
+app.use('/uploads', protect, express.static(uploadDir, {
   // prevent direct indexing / caching of user content
   setHeaders: (res) => res.setHeader('Cache-Control', 'private, max-age=3600'),
 }));

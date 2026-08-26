@@ -3,16 +3,26 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 
+import os from 'os';
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const uploadDir = path.join(__dirname, '..', '..', 'uploads');
+// On Vercel / serverless environments, file system is read-only except for /tmp
+const isServerless = Boolean(process.env.VERCEL);
+export const uploadDir = isServerless
+  ? path.join(os.tmpdir(), 'uploads')
+  : path.join(__dirname, '..', '..', 'uploads');
 
 // Create upload directories if they don't exist
 ['audio', 'video', 'images', 'documents'].forEach((dir) => {
   const dirPath = path.join(uploadDir, dir);
-  if (!fs.existsSync(dirPath)) {
-    fs.mkdirSync(dirPath, { recursive: true });
+  try {
+    if (!fs.existsSync(dirPath)) {
+      fs.mkdirSync(dirPath, { recursive: true });
+    }
+  } catch (err) {
+    console.warn(`⚠️ Could not create upload directory ${dirPath}:`, err.message);
   }
 });
 
