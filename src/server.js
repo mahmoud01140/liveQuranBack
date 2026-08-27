@@ -39,6 +39,7 @@ import calendarRoutes from './routes/calendar.routes.js';
 import reportsRoutes from './routes/reports.routes.js';
 import dailyTaskRoutes from './routes/dailyTask.routes.js';
 import ijazahRoutes from './routes/ijazah.routes.js';
+import surveyRoutes from './routes/survey.routes.js';
 
 
 // Parse allowed origins (supports comma-separated CLIENT_URL for multiple domains)
@@ -172,6 +173,7 @@ app.use('/api/calendar', calendarRoutes);
 app.use('/api/reports', reportsRoutes);
 app.use('/api/daily-tasks', dailyTaskRoutes);
 app.use('/api/ijazah', ijazahRoutes);
+app.use('/api/survey', surveyRoutes);
 
 
 // Health check

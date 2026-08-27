@@ -103,6 +103,12 @@ export const submitExam = async (req, res) => {
         selectedAnswer = answers?.[idx];
         isCorrect = selectedAnswer === q.correctAnswer;
         points = isCorrect ? (q.points || 1) : 0;
+      } else if (q.type === 'true_false') {
+        // answers[idx] is boolean (true/false)
+        const studentBool = answers?.[idx];
+        isCorrect = studentBool === q.correctAnswerBool;
+        points = isCorrect ? (q.points || 1) : 0;
+        selectedAnswer = studentBool;
       } else if (q.type === 'written') {
         writtenAnswer = (rawWrittenAnswers?.[idx] || '').trim();
         const correct = (q.correctAnswerText || '').trim();
@@ -468,4 +474,35 @@ export const getPendingReviews = async (req, res) => {
   }
 };
 
+// ── ADMIN: Placement Exam Management ─────────────────────────────────────────
 
+// GET /api/exams/admin/placement — get all placement exams for admin editing
+export const getAdminPlacementExams = async (req, res) => {
+  try {
+    const exams = await Exam.find({ type: 'placement' }).sort({ registrationType: 1 });
+    res.json({ exams });
+  } catch (error) {
+    res.status(500).json({ message: 'خطأ في جلب امتحانات تحديد المستوى' });
+  }
+};
+
+// PUT /api/exams/admin/placement/:registrationType — update a placement exam
+export const updatePlacementExam = async (req, res) => {
+  try {
+    const { registrationType } = req.params;
+    const { title, questions, oralTasks, passingScore, duration } = req.body;
+
+    const totalPoints = (questions || []).reduce((sum, q) => sum + (q.points || 1), 0);
+
+    const exam = await Exam.findOneAndUpdate(
+      { type: 'placement', registrationType },
+      { title, questions, oralTasks, passingScore, duration, totalPoints },
+      { new: true, upsert: true, runValidators: false }
+    );
+
+    res.json({ message: 'تم حفظ امتحان تحديد المستوى بنجاح', exam });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'خطأ في حفظ امتحان تحديد المستوى' });
+  }
+};

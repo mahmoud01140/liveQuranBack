@@ -4,13 +4,14 @@ const questionSchema = new mongoose.Schema({
   questionNumber:    { type: Number },
   text:              { type: String },
   arabicText:        { type: String },
-  type:              { type: String, enum: ['mcq', 'written', 'recitation'], default: 'mcq' },
+  type:              { type: String, enum: ['mcq', 'true_false', 'written', 'recitation'], default: 'mcq' },
   options:           [String],
   correctAnswer:     { type: Number },      // index into options (MCQ)
+  correctAnswerBool: { type: Boolean },     // correct answer for true/false questions
   correctAnswerText: { type: String },      // correct text answer (written)
   points:            { type: Number, default: 1 },
   instruction:       { type: String },      // instruction for recitation questions
-  mode:              { type: String, enum: ['practice', 'quiz'], default: 'practice' }, // practice = quran listening + text visible; quiz = hidden text, audio only
+  mode:              { type: String, enum: ['practice', 'quiz'], default: 'practice' },
   surahNumber:       { type: Number },
   fromVerse:         { type: Number },
   toVerse:           { type: Number },

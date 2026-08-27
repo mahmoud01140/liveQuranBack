@@ -6,6 +6,7 @@ import {
   getGroupResults, getExamResults,
   reviewOralResult, getPendingReviews,
   getMyWeakPoints, updateWeakPointStatus,
+  getAdminPlacementExams, updatePlacementExam,
 } from '../controllers/exam.controller.js';
 import { protect } from '../middleware/auth.middleware.js';
 import { teacherOnly, adminOnly } from '../middleware/role.middleware.js';
@@ -13,6 +14,10 @@ import { uploadMultipleAudio } from '../middleware/upload.middleware.js';
 
 const router = express.Router();
 router.use(protect);
+
+// ── Admin Placement Management ────────────────────────────────────────────────
+router.get('/admin/placement', adminOnly, getAdminPlacementExams);
+router.put('/admin/placement/:registrationType', adminOnly, updatePlacementExam);
 
 // ── Static paths first (before param routes) ──────────────────────
 router.get('/placement/:type', getPlacementExam);
