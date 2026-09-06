@@ -19,12 +19,14 @@ if (!MONGODB_URI) {
   process.exit(1);
 }
 
+import Group from './models/Group.js';
+
 // Read optional CLI arguments: node src/createAdmin.js [email] [password] [firstName] [lastName]
 const args = process.argv.slice(2);
 const email = (args[0] || 'admin@quran.com').trim().toLowerCase();
 const password = args[1] || 'Admin123!';
-const firstName = args[2] || 'مدير';
-const lastName = args[3] || 'المنصة';
+const firstName = args[2] || 'الشيخ';
+const lastName = args[3] || 'المعلم والمدير';
 
 async function createOrUpdateAdmin() {
   try {
@@ -71,6 +73,17 @@ async function createOrUpdateAdmin() {
       console.log(`👤 الاسم: ${firstName} ${lastName}`);
       console.log(`👑 الرتبة: admin`);
       console.log('========================================\n');
+    }
+
+    const adminDoc = existingUser || newAdmin;
+    if (adminDoc) {
+      const updateResult = await Group.updateMany(
+        { $or: [{ teacher: null }, { teacher: { $exists: false } }] },
+        { teacher: adminDoc._id }
+      );
+      if (updateResult.modifiedCount > 0) {
+        console.log(`✅ تم ربط ${updateResult.modifiedCount} مجموعة بالمعلم والمدير تلقائياً.`);
+      }
     }
 
     await mongoose.disconnect();

@@ -28,7 +28,16 @@ export const getAllGroups = async (req, res) => {
 export const createGroup = async (req, res) => {
   try {
     const { name, description, level, maxStudents, schedule, curriculum, days, teacher } = req.body;
-    const groupTeacher = teacher || req.user._id;
+    // Single teacher model: group teacher is automatically the admin/Sheikh
+    let groupTeacher = teacher;
+    if (!groupTeacher) {
+      if (req.user?.role === 'admin') {
+        groupTeacher = req.user._id;
+      } else {
+        const adminUser = await User.findOne({ role: 'admin' });
+        groupTeacher = adminUser?._id || req.user._id;
+      }
+    }
     const group = await Group.create({ name, description, level, maxStudents, schedule, curriculum, days: days || [], teacher: groupTeacher });
     res.status(201).json({ message: 'تم إنشاء المجموعة', group });
   } catch (error) {
