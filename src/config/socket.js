@@ -84,12 +84,26 @@ export const initSocket = (io) => {
     };
 
     // ─── Group Rooms ──────────────────────────────────────────────
-    socket.on('join-group-room', ({ groupId }) => {
+    socket.on('join-group-room', async ({ groupId }) => {
       if (!groupId) return;
-      socket.join(`group:${groupId}`);
-      const count = io.sockets.adapter.rooms.get(`group:${groupId}`)?.size || 0;
-      socket.emit('room-joined', { groupId, onlineCount: count });
-      console.log(`📚 Socket ${socket.id} joined group:${groupId}`);
+      if (!requireAuth()) return;
+      try {
+        const group = await Group.findById(groupId).select('teacher students');
+        const user = await User.findById(socket.userId).select('role');
+        if (!group) return socket.emit('error', { message: 'المجموعة غير موجودة' });
+        const isTeacher = group.teacher?.toString() === socket.userId;
+        const isStudent = group.students.some(s => s.toString() === socket.userId);
+        const isAdmin = user?.role === 'admin';
+        if (!isTeacher && !isStudent && !isAdmin) {
+          return socket.emit('error', { message: 'غير مصرح لك بالانضمام لغرفة هذه المجموعة' });
+        }
+        socket.join(`group:${groupId}`);
+        const count = io.sockets.adapter.rooms.get(`group:${groupId}`)?.size || 0;
+        socket.emit('room-joined', { groupId, onlineCount: count });
+        console.log(`📚 Socket ${socket.id} joined group:${groupId}`);
+      } catch (err) {
+        console.error('join-group-room error:', err.message);
+      }
     });
 
     socket.on('leave-group-room', ({ groupId }) => {
@@ -123,8 +137,22 @@ export const initSocket = (io) => {
       console.log(`🔴 Broadcast started: session ${sessionId}`);
     });
 
-    socket.on('end-broadcast', ({ sessionId, groupId }) => {
+    socket.on('end-broadcast', async ({ sessionId, groupId }) => {
       if (!requireAuth()) return;
+      // Verify user is admin/teacher of the group
+      try {
+        const group = await Group.findById(groupId).select('teacher');
+        const user = await User.findById(socket.userId).select('role');
+        if (!group) return socket.emit('error', { message: 'Group not found' });
+        const isTeacher = group.teacher?.toString() === socket.userId;
+        const isAdmin = user?.role === 'admin';
+        if (!isTeacher && !isAdmin) {
+          return socket.emit('error', { message: 'Unauthorized to end broadcast' });
+        }
+      } catch {
+        return socket.emit('error', { message: 'Authorization check failed' });
+      }
+
       io.to(`group:${groupId}`).emit('broadcast-ended', { sessionId });
       console.log(`⬛ Broadcast ended: session ${sessionId}`);
     });
@@ -141,6 +169,19 @@ export const initSocket = (io) => {
     const handleChatMessage = async ({ sessionId, groupId, message, type, senderName }) => {
       if (!requireAuth()) return;
       if (!message || !groupId) return;
+
+      // Verify membership
+      try {
+        const group = await Group.findById(groupId).select('teacher students');
+        const user = await User.findById(socket.userId).select('role');
+        if (!group) return;
+        const isTeacher = group.teacher?.toString() === socket.userId;
+        const isStudent = group.students.some(s => s.toString() === socket.userId);
+        const isAdmin = user?.role === 'admin';
+        if (!isTeacher && !isStudent && !isAdmin) return;
+      } catch {
+        return;
+      }
 
       // Sanitize message length
       const sanitizedMessage = String(message).substring(0, 2000);

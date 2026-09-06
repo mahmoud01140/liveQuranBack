@@ -1,5 +1,6 @@
 import StudentRecitation from '../models/StudentRecitation.js';
 import User from '../models/User.js';
+import Group from '../models/Group.js';
 import { getFileUrl } from '../middleware/upload.middleware.js';
 
 // POST /api/student-recitations
@@ -55,6 +56,15 @@ export const getGroupRecitations = async (req, res) => {
     const { groupId } = req.params;
     const { status } = req.query;
 
+    const group = await Group.findById(groupId).select('teacher');
+    if (!group) return res.status(404).json({ message: 'المجموعة غير موجودة' });
+
+    const isTeacher = group.teacher?.toString() === req.user._id.toString();
+    const isAdmin = req.user.role === 'admin';
+    if (!isTeacher && !isAdmin) {
+      return res.status(403).json({ message: 'غير مصرح لك بعرض تلاوات هذه المجموعة' });
+    }
+
     const query = { group: groupId };
     if (status) query.status = status;
 
@@ -75,9 +85,15 @@ export const reviewRecitation = async (req, res) => {
     const { id } = req.params;
     const { rating, teacherNotes } = req.body;
 
-    const recitation = await StudentRecitation.findById(id);
+    const recitation = await StudentRecitation.findById(id).populate('group', 'teacher');
     if (!recitation) {
       return res.status(404).json({ message: 'التلاوة المطلوبة غير موجودة' });
+    }
+
+    const isTeacher = recitation.group?.teacher?.toString() === req.user._id.toString();
+    const isAdmin = req.user.role === 'admin';
+    if (!isTeacher && !isAdmin) {
+      return res.status(403).json({ message: 'غير مصرح لك بمراجعة تلاوة لا تخص طلاب مجموعتك' });
     }
 
     recitation.status = 'reviewed';

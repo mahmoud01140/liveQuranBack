@@ -39,10 +39,16 @@ export const getMyIjazah = async (req, res) => {
 // PUT /api/ijazah/:id/progress  (Teacher/Admin updates completed Juz or awards certificate)
 export const updateIjazahProgress = async (req, res) => {
   try {
-    const { completedJuz, riwayah, status, sheikhName, generalRating, notes } = req.body;
     const ijazah = await IjazahRecord.findById(req.params.id);
 
     if (!ijazah) return res.status(404).json({ message: 'سجل الإجازة غير موجود' });
+
+    // Verify teacher authorization
+    const isTeacher = ijazah.teacher?.toString() === req.user._id.toString();
+    const isAdmin = req.user.role === 'admin';
+    if (!isTeacher && !isAdmin) {
+      return res.status(403).json({ message: 'غير مصرح لك بتعديل أو منح هذه الإجازة القرآنية' });
+    }
 
     if (completedJuz) ijazah.completedJuz = completedJuz;
     if (riwayah) ijazah.riwayah = riwayah;

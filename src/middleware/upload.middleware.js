@@ -64,11 +64,28 @@ const upload = multer({
   },
 });
 
+const receiptFileFilter = (req, file, cb) => {
+  const allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
+  if (allowedTypes.includes(file.mimetype)) {
+    cb(null, true);
+  } else {
+    cb(new Error('صيغة الملف غير مسموحة. يرجى رفع صورة (JPG, PNG, WebP) أو ملف PDF فقط.'), false);
+  }
+};
+
+const receiptUpload = multer({
+  storage,
+  fileFilter: receiptFileFilter,
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10MB max for receipts
+  },
+});
+
 export const uploadAudio = upload.single('audio');
 export const uploadVideo = upload.single('video');
 export const uploadImage = upload.single('image');
 export const uploadDocument = upload.single('document');
-export const uploadReceipt = upload.single('receipt');
+export const uploadReceipt = receiptUpload.single('receipt');
 export const uploadResource = upload.single('resource');
 export const uploadMultipleAudio = upload.array('recordings', 10);
 export const uploadHomeworkFiles = upload.fields([

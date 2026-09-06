@@ -30,6 +30,22 @@ const dailyTaskSchema = new mongoose.Schema({
   // Pillar 3: Cumulative Revision / Solidification (الماضي البعيد / المحكم والتمكين)
   cumulativeRevision: { type: quranPortionSchema, default: () => ({}) },
 
+  // Pillar 4: Additional Exercise / Training (تدريب إضافي / تجويد / استماع)
+  additionalExercise: {
+    title:   { type: String },
+    details: { type: String },
+    status: {
+      type: String,
+      enum: ['pending', 'completed', 'reviewed'],
+      default: 'pending',
+    },
+    rating: { type: Number, min: 1, max: 5 },
+  },
+
+  // Live Session Recitation Link & Mistakes
+  evaluatedInLiveSession: { type: mongoose.Schema.Types.ObjectId, ref: 'LiveSession' },
+  mistakesCount: { type: Number, default: 0 },
+
   // Overall evaluation
   overallStatus: {
     type: String,

@@ -38,6 +38,27 @@ const homeworkSubmissionSchema = new mongoose.Schema({
   earnedPoints:    { type: Number, default: 0 },
 });
 
+const recitationTurnSchema = new mongoose.Schema({
+  student:       { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  status: {
+    type: String,
+    enum: ['waiting', 'hand_raised', 'reciting', 'completed', 'skipped'],
+    default: 'waiting',
+  },
+  order:         { type: Number, default: 0 },
+  handRaisedAt:  { type: Date },
+  startedAt:     { type: Date },
+  completedAt:   { type: Date },
+  evaluation: {
+    score:         { type: Number, min: 0, max: 100 },
+    rating:        { type: Number, min: 1, max: 5 },
+    mistakesCount: { type: Number, default: 0 },
+    notes:         { type: String, maxlength: 600 },
+    portionType:   { type: String, enum: ['newHifz', 'nearRevision', 'cumulativeRevision', 'all'], default: 'newHifz' },
+    evaluatedAt:   { type: Date },
+  },
+}, { timestamps: true });
+
 const liveSessionSchema = new mongoose.Schema({
   group:       { type: mongoose.Schema.Types.ObjectId, ref: 'Group', required: true },
   teacher:     { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
@@ -59,6 +80,10 @@ const liveSessionSchema = new mongoose.Schema({
 
   attendees: [attendeeSchema],
   attendanceRecords: [attendanceRecordSchema],
+
+  // Live Recitation Queue System
+  recitationQueue: [recitationTurnSchema],
+  currentSpeaker:  { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
 
   sessionType: {
     type: String,

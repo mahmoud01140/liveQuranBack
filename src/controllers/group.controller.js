@@ -161,11 +161,17 @@ export const getGroupSchedule = async (req, res) => {
 // PUT /api/groups/:id/schedule
 export const updateGroupSchedule = async (req, res) => {
   try {
-    const group = await Group.findByIdAndUpdate(
-      req.params.id,
-      { schedule: req.body.schedule },
-      { new: true }
-    );
+    const group = await Group.findById(req.params.id);
+    if (!group) return res.status(404).json({ message: 'المجموعة غير موجودة' });
+
+    // Verify teacher owns the group if not admin
+    if (req.user.role === 'teacher' && group.teacher?.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ message: 'غير مصرح لك بتعديل جدول هذه المجموعة' });
+    }
+
+    group.schedule = req.body.schedule;
+    await group.save();
+
     // Emit real-time update to all students in this group room
     const io = req.app.get('io');
     if (io) {

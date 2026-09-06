@@ -31,10 +31,10 @@ router.put('/results/:resultId/review', teacherOnly, reviewOralResult);
 
 // ── Group & CRUD ──────────────────────────────────────────────────
 router.get('/group/:groupId', getGroupExams);
-router.get('/group/:groupId/results', getGroupResults);   // Admin sees all results per group
-router.post('/', createExam);                             // Admin + Teacher can create
-router.put('/:id', updateExam);
-router.delete('/:id', deleteExam);                        // Admin + Teacher can delete
+router.get('/group/:groupId/results', adminOnly, getGroupResults);   // Admin sees all results per group
+router.post('/', teacherOnly, createExam);                             // Admin + Teacher can create
+router.put('/:id', teacherOnly, updateExam);
+router.delete('/:id', teacherOnly, deleteExam);                        // Admin + Teacher can delete
 
 // ── Results for specific exam ─────────────────────────────────────
 router.get('/:examId/results', getExamResults);           // Admin sees results per exam

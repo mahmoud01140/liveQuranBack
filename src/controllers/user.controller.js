@@ -7,23 +7,32 @@ import { sendWebPush } from '../utils/webpush.js';
 // GET /api/users — admin only
 export const getAllUsers = async (req, res) => {
   try {
-    const { role, level, status, country, page = 1, limit = 20 } = req.query;
+    const { role, level, status, country, search, page = 1, limit = 20 } = req.query;
     const filter = {};
     if (role) filter.role = role;
     if (level) filter.assignedLevel = level;
     if (status === 'pending') { filter.isVerified = true; filter.isApproved = false; }
     if (status === 'active') { filter.isApproved = true; filter.isActive = true; }
     if (country) filter.country = country;
+    if (search && search.trim()) {
+      const sRegex = new RegExp(search.trim(), 'i');
+      filter.$or = [
+        { firstName: sRegex },
+        { lastName: sRegex },
+        { email: sRegex },
+        { phone: sRegex },
+      ];
+    }
 
     const total = await User.countDocuments(filter);
     const users = await User.find(filter)
       .select('-password -otp -otpExpires -resetToken')
       .populate('group', 'name level')
       .sort({ createdAt: -1 })
-      .skip((page - 1) * limit)
+      .skip((parseInt(page) - 1) * parseInt(limit))
       .limit(parseInt(limit));
 
-    res.json({ users, total, page: parseInt(page), pages: Math.ceil(total / limit) });
+    res.json({ users, total, page: parseInt(page), pages: Math.ceil(total / parseInt(limit)) });
   } catch (error) {
     res.status(500).json({ message: 'خطأ في جلب المستخدمين' });
   }
@@ -32,10 +41,25 @@ export const getAllUsers = async (req, res) => {
 // GET /api/users/pending-approval
 export const getPendingApproval = async (req, res) => {
   try {
-    const users = await User.find({ isVerified: true, isApproved: false, role: 'student' })
+    const { page, limit } = req.query;
+    const filter = { isVerified: true, isApproved: false, role: 'student' };
+    const total = await User.countDocuments(filter);
+
+    let query = User.find(filter)
       .select('-password -otp')
       .sort({ createdAt: -1 });
-    res.json({ users });
+
+    if (page && limit) {
+      query = query.skip((parseInt(page) - 1) * parseInt(limit)).limit(parseInt(limit));
+    }
+
+    const users = await query;
+    res.json({
+      users,
+      total,
+      page: page ? parseInt(page) : 1,
+      pages: limit ? Math.ceil(total / parseInt(limit)) : 1,
+    });
   } catch (error) {
     res.status(500).json({ message: 'خطأ' });
   }
@@ -44,7 +68,7 @@ export const getPendingApproval = async (req, res) => {
 // GET /api/users/students/unassigned
 export const getUnassignedStudents = async (req, res) => {
   try {
-    const { level } = req.query;
+    const { level, page, limit } = req.query;
 
     // Show ALL students without a group — including those pending approval
     // Admin needs to see them to assign & optionally approve simultaneously
@@ -54,10 +78,23 @@ export const getUnassignedStudents = async (req, res) => {
     };
     if (level) filter.assignedLevel = level;
 
-    const students = await User.find(filter)
+    const total = await User.countDocuments(filter);
+
+    let query = User.find(filter)
       .select('firstName lastName email assignedLevel country avatar createdAt isApproved isVerified registrationType')
       .sort({ createdAt: -1 });
-    res.json({ students });
+
+    if (page && limit) {
+      query = query.skip((parseInt(page) - 1) * parseInt(limit)).limit(parseInt(limit));
+    }
+
+    const students = await query;
+    res.json({
+      students,
+      total,
+      page: page ? parseInt(page) : 1,
+      pages: limit ? Math.ceil(total / parseInt(limit)) : 1,
+    });
   } catch (error) {
     res.status(500).json({ message: 'خطأ' });
   }
@@ -79,6 +116,11 @@ export const getUserById = async (req, res) => {
 // PUT /api/users/:id
 export const updateUser = async (req, res) => {
   try {
+    // Prevent IDOR: only the user themselves or an admin can update this profile
+    if (req.user.role !== 'admin' && req.user._id.toString() !== req.params.id) {
+      return res.status(403).json({ message: 'غير مصرح لك بتعديل بيانات هذا المستخدم' });
+    }
+
     const allowedFields = ['firstName', 'lastName', 'phone', 'country', 'avatar', 'notificationPreferences', 'dateOfBirth', 'gender', 'registrationType'];
     const updates = {};
     allowedFields.forEach(f => { if (req.body[f] !== undefined) updates[f] = req.body[f]; });

@@ -6,11 +6,11 @@ import { adminOnly } from '../middleware/role.middleware.js';
 const router = express.Router();
 router.use(protect);
 
-// Student/Onboarding: get survey questions for a registration type
-router.get('/:type', getSurvey);
-
-// Admin: manage surveys
+// Admin: manage surveys (must come before /:type param route)
 router.get('/admin/all', adminOnly, getAllSurveysAdmin);
 router.put('/admin/:type', adminOnly, updateSurvey);
+
+// Student/Onboarding: get survey questions for a registration type
+router.get('/:type', getSurvey);
 
 export default router;

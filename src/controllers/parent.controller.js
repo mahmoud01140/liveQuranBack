@@ -26,7 +26,7 @@ export const getChildren = async (req, res) => {
 // POST /api/parents/children
 export const linkChild = async (req, res) => {
   try {
-    const { childEmail } = req.body;
+    const { childEmail, childPhone } = req.body;
     if (!childEmail?.trim()) {
       return res.status(400).json({ message: 'البريد الإلكتروني للابن مطلوب' });
     }
@@ -40,6 +40,15 @@ export const linkChild = async (req, res) => {
       return res.status(404).json({ message: 'لم يتم العثور على طالب مسجل بهذا البريد الإلكتروني' });
     }
 
+    // Security Verification: If child has a phone registered and input provided, verify match
+    if (child.phone && childPhone?.trim()) {
+      const normalizedChildPhone = child.phone.replace(/[\s\-\+]/g, '');
+      const normalizedInputPhone = childPhone.trim().replace(/[\s\-\+]/g, '');
+      if (!normalizedChildPhone.endsWith(normalizedInputPhone) && !normalizedInputPhone.endsWith(normalizedChildPhone)) {
+        return res.status(400).json({ message: 'رقم هاتف الطالب غير متطابق مع البيانات المسجلة' });
+      }
+    }
+
     const parent = await User.findById(req.user._id);
     if (parent.children.includes(child._id)) {
       return res.status(400).json({ message: 'هذا الابن مرتبط بحسابك بالفعل' });
@@ -47,6 +56,20 @@ export const linkChild = async (req, res) => {
 
     parent.children.push(child._id);
     await parent.save();
+
+    // Create a notification for the student
+    try {
+      const Notification = (await import('../models/Notification.js')).default;
+      await Notification.create({
+        recipient: child._id,
+        type: 'general',
+        title: 'تم ربط حسابك بولي أمر 👨‍👩‍👧',
+        body: `قام ولي الأمر (${parent.firstName} ${parent.lastName}) بربط حسابك لمتابعة أدائك في الحلقات وحفظ القرآن.`,
+        data: { parentId: parent._id }
+      });
+    } catch (notifErr) {
+      console.warn('Could not send student linking notification:', notifErr.message);
+    }
 
     // Populate group details for child to return
     await child.populate('group', 'name level');

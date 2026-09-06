@@ -193,3 +193,86 @@ export const getGroupTodayTasks = async (req, res) => {
     res.status(500).json({ message: 'خطأ في جلب أوراد المجموعة' });
   }
 };
+
+// PUT /api/daily-tasks/student/:studentId/assign (Teacher/Admin assigns or modifies a specific student's daily task)
+export const assignStudentDailyTask = async (req, res) => {
+  try {
+    const { studentId } = req.params;
+    const {
+      newHifz,
+      nearRevision,
+      cumulativeRevision,
+      additionalExercise,
+      teacherNotes,
+      date,
+    } = req.body;
+
+    const targetDate = date ? new Date(date) : new Date();
+    const startOfDay = new Date(targetDate);
+    startOfDay.setHours(0, 0, 0, 0);
+    const endOfDay = new Date(targetDate);
+    endOfDay.setHours(23, 59, 59, 999);
+
+    const student = await User.findById(studentId).populate('group');
+    if (!student) return res.status(404).json({ message: 'الطالب غير موجود' });
+
+    let task = await DailyTask.findOne({
+      student: studentId,
+      date: { $gte: startOfDay, $lte: endOfDay },
+    });
+
+    if (!task) {
+      task = new DailyTask({
+        student: studentId,
+        group: student.group?._id || student.group,
+        date: targetDate,
+      });
+    }
+
+    if (newHifz) {
+      task.newHifz = {
+        ...(task.newHifz?.toObject?.() || {}),
+        ...newHifz,
+        versesCount: (newHifz.toVerse && newHifz.fromVerse)
+          ? (newHifz.toVerse - newHifz.fromVerse + 1)
+          : (newHifz.versesCount || 0),
+        status: newHifz.status || task.newHifz?.status || 'pending',
+      };
+    }
+
+    if (nearRevision) {
+      task.nearRevision = {
+        ...(task.nearRevision?.toObject?.() || {}),
+        ...nearRevision,
+        versesCount: (nearRevision.toVerse && nearRevision.fromVerse)
+          ? (nearRevision.toVerse - nearRevision.fromVerse + 1)
+          : (nearRevision.versesCount || 0),
+        status: nearRevision.status || task.nearRevision?.status || 'pending',
+      };
+    }
+
+    if (cumulativeRevision) {
+      task.cumulativeRevision = {
+        ...(task.cumulativeRevision?.toObject?.() || {}),
+        ...cumulativeRevision,
+        status: cumulativeRevision.status || task.cumulativeRevision?.status || 'pending',
+      };
+    }
+
+    if (additionalExercise !== undefined) {
+      task.additionalExercise = additionalExercise;
+    }
+
+    if (teacherNotes !== undefined) {
+      task.teacherNotes = teacherNotes;
+    }
+
+    task.reviewedBy = req.user._id;
+    await task.save();
+
+    res.json({ message: 'تم حفظ وتخصيص الورد اليومي للطالب بنجاح ✨', task });
+  } catch (error) {
+    res.status(500).json({ message: 'خطأ في تخصيص الورد اليومي' });
+  }
+};
+

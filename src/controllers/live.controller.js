@@ -1,10 +1,18 @@
+import crypto from 'crypto';
 import LiveSession from '../models/LiveSession.js';
 import Group from '../models/Group.js';
 import User from '../models/User.js';
 import Notification from '../models/Notification.js';
+import DailyTask from '../models/DailyTask.js';
 import { sendWebPush } from '../utils/webpush.js';
 import { getFileUrl } from '../middleware/upload.middleware.js';
 import { evaluateUserSubscription } from './payment.controller.js';
+
+export const getSecureLiveRoomName = (sessionId) => {
+  const secret = process.env.JWT_SECRET || 'live_quran_platform_secret';
+  const hash = crypto.createHmac('sha256', secret).update(sessionId.toString()).digest('hex').substring(0, 18);
+  return `quran_${hash}`;
+};
 
 // ─── Homework helpers ───────────────────────────────────────────────────────
 // PUT /api/live/:id/homework  (teacher/admin: set or update homework)
@@ -249,6 +257,14 @@ export const createSession = async (req, res) => {
       return res.status(400).json({ message: 'معرّف المجموعة وعنوان الجلسة مطلوبان' });
     }
 
+    // Verify teacher owns the group if not admin
+    if (req.user.role === 'teacher') {
+      const groupCheck = await Group.findById(groupId).select('teacher');
+      if (!groupCheck || groupCheck.teacher?.toString() !== req.user._id.toString()) {
+        return res.status(403).json({ message: 'غير مصرح لك بإنشاء جلسة لهذه المجموعة' });
+      }
+    }
+
     const session = await LiveSession.create({
       group: groupId,
       teacher: req.user._id,
@@ -279,7 +295,10 @@ export const createSession = async (req, res) => {
       if (io) io.emitToUser(student._id, 'session-scheduled', { sessionId: session._id });
     });
 
-    res.status(201).json({ message: 'تم إنشاء الجلسة', session });
+    const sessionObj = session.toObject ? session.toObject() : { ...session };
+    sessionObj.liveRoomName = getSecureLiveRoomName(session._id);
+
+    res.status(201).json({ message: 'تم إنشاء الجلسة', session: sessionObj });
   } catch (error) {
     res.status(500).json({ message: 'خطأ في إنشاء الجلسة' });
   }
@@ -293,24 +312,28 @@ export const getActiveSession = async (req, res) => {
 
     let query = { status: 'live' };
     const groupId = user.group?._id || user.group;
-    if (user.role === 'student' && groupId) {
+
+    if (user.role === 'student') {
+      // Must have an assigned group
+      if (!groupId) {
+        return res.json({ session: null, subscription: subStatus });
+      }
       query.group = groupId;
     }
-    let session = await LiveSession.findOne(query)
+
+    const session = await LiveSession.findOne(query)
       .populate('teacher', 'firstName lastName avatar')
       .populate('group', 'name level students')
       .sort({ startedAt: -1 });
 
-    // Fallback: if student has no specific group or live session not found in group, find any live session
-    if (!session && user.role === 'student') {
-      session = await LiveSession.findOne({ status: 'live' })
-        .populate('teacher', 'firstName lastName avatar')
-        .populate('group', 'name level students')
-        .sort({ startedAt: -1 });
+    let sessionObj = null;
+    if (session) {
+      sessionObj = session.toObject ? session.toObject() : { ...session };
+      sessionObj.liveRoomName = getSecureLiveRoomName(session._id);
     }
 
     res.json({
-      session: session || null,
+      session: sessionObj,
       subscription: subStatus,
     });
   } catch (error) {
@@ -327,8 +350,21 @@ export const getSessionById = async (req, res) => {
       .populate('attendees.student', 'firstName lastName avatar');
     if (!session) return res.status(404).json({ message: 'الجلسة غير موجودة' });
 
+    // Verify student belongs to this group
+    if (req.user.role === 'student') {
+      const isMember = session.group?.students?.some(
+        s => (s._id?.toString() || s.toString()) === req.user._id.toString()
+      );
+      if (!isMember) {
+        return res.status(403).json({ message: 'غير مصرح لك بالوصول لبيانات هذه الجلسة لأنك لست مسجلاً في هذه المجموعة' });
+      }
+    }
+
     const subStatus = await evaluateUserSubscription(req.user);
-    res.json({ session, subscription: subStatus });
+    const sessionObj = session.toObject ? session.toObject() : { ...session };
+    sessionObj.liveRoomName = getSecureLiveRoomName(session._id);
+
+    res.json({ session: sessionObj, subscription: subStatus });
   } catch (error) {
     res.status(500).json({ message: 'خطأ' });
   }
@@ -337,11 +373,22 @@ export const getSessionById = async (req, res) => {
 // PUT /api/live/:id/start
 export const startSession = async (req, res) => {
   try {
-    const session = await LiveSession.findByIdAndUpdate(
-      req.params.id,
-      { status: 'live', startedAt: new Date(), teacherSocketId: req.body.teacherSocketId || '' },
-      { new: true }
-    ).populate('group', 'students name liveRoomId');
+    const session = await LiveSession.findById(req.params.id).populate('group', 'students name teacher');
+    if (!session) return res.status(404).json({ message: 'الجلسة غير موجودة' });
+
+    // Verify teacher authorization
+    if (req.user.role === 'teacher') {
+      const isTeacher = session.teacher?.toString() === req.user._id.toString() ||
+                        session.group?.teacher?.toString() === req.user._id.toString();
+      if (!isTeacher) {
+        return res.status(403).json({ message: 'غير مصرح لك ببدء هذه الجلسة' });
+      }
+    }
+
+    session.status = 'live';
+    session.startedAt = new Date();
+    session.teacherSocketId = req.body.teacherSocketId || '';
+    await session.save();
 
     const io = req.app.get('io');
     if (io) {
@@ -363,7 +410,10 @@ export const startSession = async (req, res) => {
       )
     );
 
-    res.json({ message: 'تم بدء البث', session });
+    const sessionObj = session.toObject ? session.toObject() : { ...session };
+    sessionObj.liveRoomName = getSecureLiveRoomName(session._id);
+
+    res.json({ message: 'تم بدء البث', session: sessionObj });
   } catch (error) {
     res.status(500).json({ message: 'خطأ في بدء البث' });
   }
@@ -372,21 +422,31 @@ export const startSession = async (req, res) => {
 // PUT /api/live/:id/end
 export const endSession = async (req, res) => {
   try {
-    const session = await LiveSession.findByIdAndUpdate(
-      req.params.id,
-      { status: 'ended', endedAt: new Date(), recordingUrl: req.body.recordingUrl },
-      { new: true }
-    );
-
+    const session = await LiveSession.findById(req.params.id).populate('group', 'teacher');
     if (!session) return res.status(404).json({ message: 'الجلسة غير موجودة' });
 
+    // Verify teacher authorization
+    if (req.user.role === 'teacher') {
+      const isTeacher = session.teacher?.toString() === req.user._id.toString() ||
+                        session.group?.teacher?.toString() === req.user._id.toString();
+      if (!isTeacher) {
+        return res.status(403).json({ message: 'غير مصرح لك بإنهاء هذه الجلسة' });
+      }
+    }
+
+    session.status = 'ended';
+    session.endedAt = new Date();
+    if (req.body.recordingUrl) session.recordingUrl = req.body.recordingUrl;
+    await session.save();
+
+    const targetGroupId = session.group?._id || session.group;
     const io = req.app.get('io');
     if (io) {
-      io.to(`group:${session.group}`).emit('broadcast-ended', { sessionId: session._id });
+      io.to(`group:${targetGroupId}`).emit('broadcast-ended', { sessionId: session._id });
     }
 
     // Update group total sessions
-    await Group.findByIdAndUpdate(session.group, { $inc: { totalSessions: 1 } });
+    await Group.findByIdAndUpdate(targetGroupId, { $inc: { totalSessions: 1 } });
 
     res.json({ message: 'تم إنهاء البث', session });
   } catch (error) {
@@ -397,11 +457,18 @@ export const endSession = async (req, res) => {
 // PUT /api/live/:id/join
 export const joinSession = async (req, res) => {
   try {
-    const session = await LiveSession.findById(req.params.id);
+    const session = await LiveSession.findById(req.params.id).populate('group', 'students');
     if (!session) return res.status(404).json({ message: 'الجلسة غير موجودة' });
 
-    // Check subscription & trial eligibility for students
+    // Check subscription & group membership for students
     if (req.user.role === 'student') {
+      const isMember = session.group?.students?.some(
+        s => (s._id?.toString() || s.toString()) === req.user._id.toString()
+      );
+      if (!isMember) {
+        return res.status(403).json({ message: 'غير مصرح لك بحضور هذه الجلسة لأنك لست مسجلاً في هذه المجموعة' });
+      }
+
       const user = await User.findById(req.user._id);
       const subStatus = await evaluateUserSubscription(user);
 
@@ -441,7 +508,10 @@ export const joinSession = async (req, res) => {
       await session.save();
     }
 
-    res.json({ message: 'تم تسجيل الحضور', session });
+    const sessionObj = session.toObject ? session.toObject() : { ...session };
+    sessionObj.liveRoomName = getSecureLiveRoomName(session._id);
+
+    res.json({ message: 'تم تسجيل الحضور', session: sessionObj });
   } catch (error) {
     res.status(500).json({ message: 'خطأ' });
   }
@@ -769,5 +839,328 @@ export const respondAttendancePong = async (req, res) => {
     res.json({ message: 'تم تأكيد حضورك بنجاح ✅' });
   } catch (error) {
     res.status(500).json({ message: 'خطأ في تأكيد الحضور' });
+  }
+};
+
+// ─── Recitation Queue & Personalized Wird (Vercel-friendly / HTTP Polling) ───
+
+// GET /api/live/:id/queue
+export const getRecitationQueue = async (req, res) => {
+  try {
+    const session = await LiveSession.findById(req.params.id)
+      .populate('group', 'name students')
+      .populate('recitationQueue.student', 'firstName lastName avatar email phone')
+      .populate('currentSpeaker', 'firstName lastName avatar email');
+
+    if (!session) return res.status(404).json({ message: 'الجلسة غير موجودة' });
+
+    // Sync all group students into queue if missing
+    if (session.group?.students?.length) {
+      const existingStudentIds = new Set(
+        session.recitationQueue.map(q => q.student?._id?.toString() || q.student?.toString())
+      );
+      let added = false;
+      session.group.students.forEach((sId, idx) => {
+        const idStr = sId.toString();
+        if (!existingStudentIds.has(idStr)) {
+          session.recitationQueue.push({
+            student: sId,
+            status: 'waiting',
+            order: session.recitationQueue.length + 1,
+          });
+          added = true;
+        }
+      });
+      if (added) {
+        await session.save();
+        await session.populate('recitationQueue.student', 'firstName lastName avatar email phone');
+      }
+    }
+
+    // Fetch today's personalized tasks for all students in the queue
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+    const endOfToday = new Date();
+    endOfToday.setHours(23, 59, 59, 999);
+
+    const studentIds = session.recitationQueue
+      .map(q => q.student?._id || q.student)
+      .filter(Boolean);
+
+    const tasks = await DailyTask.find({
+      student: { $in: studentIds },
+      date: { $gte: startOfToday, $lte: endOfToday },
+    });
+
+    const tasksMap = {};
+    tasks.forEach(t => {
+      tasksMap[t.student.toString()] = t;
+    });
+
+    res.json({
+      queue: session.recitationQueue,
+      currentSpeaker: session.currentSpeaker,
+      tasks: tasksMap,
+      attendees: session.attendees || [],
+      attendanceRecords: session.attendanceRecords || [],
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'خطأ في جلب طابور التسميع' });
+  }
+};
+
+// POST /api/live/:id/queue/raise-hand (Student toggles hand raise)
+export const raiseHandRecitation = async (req, res) => {
+  try {
+    const session = await LiveSession.findById(req.params.id);
+    if (!session) return res.status(404).json({ message: 'الجلسة غير موجودة' });
+
+    const studentId = req.user._id.toString();
+    let turn = session.recitationQueue.find(
+      q => q.student.toString() === studentId
+    );
+
+    if (!turn) {
+      turn = {
+        student: req.user._id,
+        status: 'hand_raised',
+        order: session.recitationQueue.length + 1,
+        handRaisedAt: new Date(),
+      };
+      session.recitationQueue.push(turn);
+    } else {
+      if (turn.status === 'hand_raised') {
+        turn.status = 'waiting';
+        turn.handRaisedAt = null;
+      } else {
+        turn.status = 'hand_raised';
+        turn.handRaisedAt = new Date();
+      }
+    }
+
+    await session.save();
+    res.json({
+      message: turn.status === 'hand_raised' ? 'تم رفع اليد لطلب التسميع ✋' : 'تم إنزال اليد',
+      status: turn.status,
+      handRaisedAt: turn.handRaisedAt,
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'خطأ في طلب دور التسميع' });
+  }
+};
+
+// POST /api/live/:id/queue/start-turn (Teacher starts a student's recitation turn)
+export const startRecitationTurn = async (req, res) => {
+  try {
+    const { studentId } = req.body;
+    if (!studentId) return res.status(400).json({ message: 'معرف الطالب مطلوب' });
+
+    const session = await LiveSession.findById(req.params.id);
+    if (!session) return res.status(404).json({ message: 'الجلسة غير موجودة' });
+
+    session.recitationQueue.forEach(q => {
+      if (q.status === 'reciting') {
+        q.status = 'waiting';
+      }
+    });
+
+    let turn = session.recitationQueue.find(
+      q => q.student.toString() === studentId.toString()
+    );
+
+    if (turn) {
+      turn.status = 'reciting';
+      turn.startedAt = new Date();
+    } else {
+      session.recitationQueue.push({
+        student: studentId,
+        status: 'reciting',
+        startedAt: new Date(),
+        order: session.recitationQueue.length + 1,
+      });
+    }
+
+    session.currentSpeaker = studentId;
+    await session.save();
+
+    res.json({
+      message: 'بدأ دور التسميع للطالب 🎙️',
+      currentSpeaker: studentId,
+      queue: session.recitationQueue,
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'خطأ في بدء دور التسميع' });
+  }
+};
+
+// POST /api/live/:id/queue/skip-turn (Teacher skips student)
+export const skipRecitationTurn = async (req, res) => {
+  try {
+    const { studentId } = req.body;
+    const session = await LiveSession.findById(req.params.id);
+    if (!session) return res.status(404).json({ message: 'الجلسة غير موجودة' });
+
+    const turn = session.recitationQueue.find(
+      q => q.student.toString() === studentId.toString()
+    );
+
+    if (turn) {
+      turn.status = 'skipped';
+    }
+
+    if (session.currentSpeaker?.toString() === studentId.toString()) {
+      session.currentSpeaker = null;
+    }
+
+    await session.save();
+    res.json({ message: 'تم تخطي الطالب ⏭️', queue: session.recitationQueue });
+  } catch (error) {
+    res.status(500).json({ message: 'خطأ في تخطي الطالب' });
+  }
+};
+
+// POST /api/live/:id/queue/reset-turn (Teacher resets student to waiting)
+export const resetRecitationTurn = async (req, res) => {
+  try {
+    const { studentId } = req.body;
+    const session = await LiveSession.findById(req.params.id);
+    if (!session) return res.status(404).json({ message: 'الجلسة غير موجودة' });
+
+    const turn = session.recitationQueue.find(
+      q => q.student.toString() === studentId.toString()
+    );
+
+    if (turn) {
+      turn.status = 'waiting';
+      turn.evaluation = undefined;
+    }
+
+    if (session.currentSpeaker?.toString() === studentId.toString()) {
+      session.currentSpeaker = null;
+    }
+
+    await session.save();
+    res.json({ message: 'تمت إعادة الطالب إلى قائمة الانتظار ⏳', queue: session.recitationQueue });
+  } catch (error) {
+    res.status(500).json({ message: 'خطأ في إعادة الطالب' });
+  }
+};
+
+// POST /api/live/:id/queue/evaluate-turn (Teacher completes and evaluates recitation)
+export const evaluateRecitationTurn = async (req, res) => {
+  try {
+    const {
+      studentId,
+      score = 100,
+      rating = 5,
+      mistakesCount = 0,
+      notes = '',
+      portionType = 'newHifz',
+      updateDailyTask = true,
+    } = req.body;
+
+    if (!studentId) return res.status(400).json({ message: 'معرف الطالب مطلوب' });
+
+    const session = await LiveSession.findById(req.params.id);
+    if (!session) return res.status(404).json({ message: 'الجلسة غير موجودة' });
+
+    // Update queue entry
+    let turn = session.recitationQueue.find(
+      q => q.student.toString() === studentId.toString()
+    );
+
+    if (!turn) {
+      turn = {
+        student: studentId,
+        order: session.recitationQueue.length + 1,
+      };
+      session.recitationQueue.push(turn);
+    }
+
+    turn.status = 'completed';
+    turn.completedAt = new Date();
+    turn.evaluation = {
+      score: Number(score),
+      rating: Number(rating),
+      mistakesCount: Number(mistakesCount),
+      notes,
+      portionType,
+      evaluatedAt: new Date(),
+    };
+
+    if (session.currentSpeaker?.toString() === studentId.toString()) {
+      session.currentSpeaker = null;
+    }
+
+    await session.save();
+
+    // Synchronize evaluation into student's DailyTask
+    if (updateDailyTask) {
+      const startOfToday = new Date();
+      startOfToday.setHours(0, 0, 0, 0);
+      const endOfToday = new Date();
+      endOfToday.setHours(23, 59, 59, 999);
+
+      let task = await DailyTask.findOne({
+        student: studentId,
+        date: { $gte: startOfToday, $lte: endOfToday },
+      });
+
+      if (!task) {
+        task = new DailyTask({
+          student: studentId,
+          group: session.group,
+          date: new Date(),
+        });
+      }
+
+      if (portionType === 'newHifz' || portionType === 'all') {
+        if (!task.newHifz) task.newHifz = {};
+        task.newHifz.status = 'reviewed';
+        task.newHifz.score = Number(score);
+        task.newHifz.rating = Number(rating);
+      }
+      if (portionType === 'nearRevision' || portionType === 'all') {
+        if (!task.nearRevision) task.nearRevision = {};
+        task.nearRevision.status = 'reviewed';
+        task.nearRevision.score = Number(score);
+        task.nearRevision.rating = Number(rating);
+      }
+      if (portionType === 'cumulativeRevision' || portionType === 'all') {
+        if (!task.cumulativeRevision) task.cumulativeRevision = {};
+        task.cumulativeRevision.status = 'reviewed';
+        task.cumulativeRevision.score = Number(score);
+        task.cumulativeRevision.rating = Number(rating);
+      }
+
+      task.teacherNotes = notes || task.teacherNotes;
+      task.evaluatedInLiveSession = session._id;
+      task.mistakesCount = Number(mistakesCount);
+      task.reviewedBy = req.user._id;
+      task.reviewedAt = new Date();
+      task.overallStatus = 'reviewed';
+
+      await task.save();
+
+      // Award XP points for live recitation
+      await User.findByIdAndUpdate(studentId, { $inc: { points: 20 } });
+
+      // Notify student
+      await Notification.create({
+        recipient: studentId,
+        type: 'grade_posted',
+        title: '⭐ تم تقييم تسميعك في الحصة المباشرة!',
+        body: `حصلت على تقييم ${rating} نجوم (الدرجة: ${score}%) في جلسة ${session.title}`,
+        data: { sessionId: session._id, link: '/student/daily-tracker' },
+      });
+    }
+
+    res.json({
+      message: 'تم رصد تقييم التسميع وتحديث الورد اليومي بنجاح ⭐',
+      queue: session.recitationQueue,
+      evaluation: turn.evaluation,
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'خطأ في رصد تقييم التسميع' });
   }
 };

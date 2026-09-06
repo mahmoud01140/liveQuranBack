@@ -6,6 +6,19 @@ import Notification from '../models/Notification.js';
 import { getFileUrl } from '../middleware/upload.middleware.js';
 import { sendWebPush } from '../utils/webpush.js';
 
+// Helper: Strip answer keys from questions before sending to students
+const sanitizeExamForStudent = (examDoc) => {
+  if (!examDoc) return null;
+  const exam = examDoc.toObject ? examDoc.toObject() : JSON.parse(JSON.stringify(examDoc));
+  if (Array.isArray(exam.questions)) {
+    exam.questions = exam.questions.map(q => {
+      const { correctAnswer, correctAnswerBool, correctAnswerText, explanation, ...safeQuestion } = q;
+      return safeQuestion;
+    });
+  }
+  return exam;
+};
+
 // GET /api/exams/placement/:type  (student | teacher | senior)
 export const getPlacementExam = async (req, res) => {
   try {
@@ -17,14 +30,15 @@ export const getPlacementExam = async (req, res) => {
     const existingResult = await ExamResult.findOne({ exam: exam._id, student: req.user._id });
     if (existingResult) {
       return res.json({
-        exam,
+        exam: sanitizeExamForStudent(exam),
         alreadyCompleted: true,
         result: existingResult,
         message: 'لقد أجريت امتحان التحديد مسبقاً',
       });
     }
 
-    res.json({ exam, alreadyCompleted: false });
+    const safeExam = req.user.role === 'student' ? sanitizeExamForStudent(exam) : exam;
+    res.json({ exam: safeExam, alreadyCompleted: false });
   } catch (error) {
     res.status(500).json({ message: 'خطأ' });
   }
@@ -36,7 +50,12 @@ export const getGroupExams = async (req, res) => {
     const exams = await Exam.find({ group: req.params.groupId, isActive: true })
       .populate('createdBy', 'firstName lastName')
       .sort({ createdAt: -1 });
-    res.json({ exams });
+
+    const safeExams = req.user.role === 'student'
+      ? exams.map(sanitizeExamForStudent)
+      : exams;
+
+    res.json({ exams: safeExams });
   } catch (error) {
     res.status(500).json({ message: 'خطأ' });
   }
@@ -58,11 +77,19 @@ export const createExam = async (req, res) => {
 // PUT /api/exams/:id
 export const updateExam = async (req, res) => {
   try {
+    const exam = await Exam.findById(req.params.id);
+    if (!exam) return res.status(404).json({ message: 'الامتحان غير موجود' });
+
+    // Verify teacher owns the exam if not admin
+    if (req.user.role === 'teacher' && exam.createdBy?.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ message: 'غير مصرح لك بتعديل هذا الامتحان' });
+    }
+
     if (req.body.questions) {
       req.body.totalPoints = req.body.questions.reduce((sum, q) => sum + (q.points || 1), 0);
     }
-    const exam = await Exam.findByIdAndUpdate(req.params.id, req.body, { new: true });
-    res.json({ message: 'تم التحديث', exam });
+    const updated = await Exam.findByIdAndUpdate(req.params.id, req.body, { new: true });
+    res.json({ message: 'تم التحديث', exam: updated });
   } catch (error) {
     res.status(500).json({ message: 'خطأ' });
   }
@@ -71,6 +98,14 @@ export const updateExam = async (req, res) => {
 // DELETE /api/exams/:id
 export const deleteExam = async (req, res) => {
   try {
+    const exam = await Exam.findById(req.params.id);
+    if (!exam) return res.status(404).json({ message: 'الامتحان غير موجود' });
+
+    // Verify teacher owns the exam if not admin
+    if (req.user.role === 'teacher' && exam.createdBy?.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ message: 'غير مصرح لك بحذف هذا الامتحان' });
+    }
+
     await Exam.findByIdAndDelete(req.params.id);
     res.json({ message: 'تم حذف الامتحان' });
   } catch (error) {
@@ -430,6 +465,12 @@ export const reviewOralResult = async (req, res) => {
 export const getMyWeakPoints = async (req, res) => {
   try {
     const studentId = req.params.studentId || req.user._id;
+
+    // Check authorization: if requesting someone else's weak points, user must be admin or teacher
+    if (studentId.toString() !== req.user._id.toString() && !['admin', 'teacher'].includes(req.user.role)) {
+      return res.status(403).json({ message: 'غير مصرح لك باستعراض نقاط ضعف هذا الطالب' });
+    }
+
     const weakPoints = await WeakPoint.find({ student: studentId })
       .sort({ createdAt: -1 });
     res.json({ weakPoints });
@@ -442,16 +483,22 @@ export const getMyWeakPoints = async (req, res) => {
 export const updateWeakPointStatus = async (req, res) => {
   try {
     const { status } = req.body;
-    const item = await WeakPoint.findByIdAndUpdate(
-      req.params.id,
-      {
-        status,
-        lastReviewedAt: new Date(),
-        $inc: { reviewCount: 1 }
-      },
-      { new: true }
-    );
-    res.json({ message: 'تم تحديث حالة نقطة الضعف', weakPoint: item });
+    const weakPoint = await WeakPoint.findById(req.params.id);
+    if (!weakPoint) return res.status(404).json({ message: 'نقطة الضعف غير موجودة' });
+
+    // Authorization: only student owner, teacher, or admin can update
+    const isOwner = weakPoint.student?.toString() === req.user._id.toString();
+    const isStaff = ['admin', 'teacher'].includes(req.user.role);
+    if (!isOwner && !isStaff) {
+      return res.status(403).json({ message: 'غير مصرح لك بتحديث حالة نقطة الضعف هذه' });
+    }
+
+    weakPoint.status = status || weakPoint.status;
+    weakPoint.lastReviewedAt = new Date();
+    weakPoint.reviewCount = (weakPoint.reviewCount || 0) + 1;
+    await weakPoint.save();
+
+    res.json({ message: 'تم تحديث حالة نقطة الضعف', weakPoint });
   } catch (error) {
     res.status(500).json({ message: 'خطأ في التحديث' });
   }

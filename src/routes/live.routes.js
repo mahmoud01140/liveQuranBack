@@ -7,7 +7,9 @@ import {
   updateHomework, submitHomework, getGroupHomework,
   getHomeworkSubmissions, checkHomeworkSubmission,
   // Live Attendance Sheet System
-  getAttendanceSheet, saveAttendanceSheet, sendAttendancePing, respondAttendancePong
+  getAttendanceSheet, saveAttendanceSheet, sendAttendancePing, respondAttendancePong,
+  // Live Recitation Queue System
+  getRecitationQueue, raiseHandRecitation, startRecitationTurn, skipRecitationTurn, resetRecitationTurn, evaluateRecitationTurn
 } from '../controllers/live.controller.js';
 import { protect } from '../middleware/auth.middleware.js';
 import { uploadHomeworkFiles } from '../middleware/upload.middleware.js';
@@ -50,5 +52,13 @@ router.put('/:id/homework', allowAdminOrTeacher, updateHomework);
 router.post('/:id/homework/submit', uploadHomeworkFiles, submitHomework);
 router.get('/:id/homework/submissions', allowAdminOrTeacher, getHomeworkSubmissions);
 router.put('/:id/homework/submissions/:submissionId/check', allowAdminOrTeacher, checkHomeworkSubmission);
+
+// Live Recitation Queue System endpoints
+router.get('/:id/queue', getRecitationQueue);
+router.post('/:id/queue/raise-hand', raiseHandRecitation);
+router.post('/:id/queue/start-turn', allowAdminOrTeacher, startRecitationTurn);
+router.post('/:id/queue/skip-turn', allowAdminOrTeacher, skipRecitationTurn);
+router.post('/:id/queue/reset-turn', allowAdminOrTeacher, resetRecitationTurn);
+router.post('/:id/queue/evaluate-turn', allowAdminOrTeacher, evaluateRecitationTurn);
 
 export default router;

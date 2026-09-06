@@ -132,9 +132,16 @@ export const getGroupFullPlan = async (req, res) => {
   }
 };
 
-// ─── Student individual plan handlers (unchanged) ─────────────────────────────
+// ─── Student individual plan handlers ─────────────────────────────
 export const getStudentPlan = async (req, res) => {
   try {
+    const isSelf = req.user._id.toString() === req.params.studentId;
+    const isStaff = ['admin', 'teacher'].includes(req.user.role);
+    const isParent = req.user.role === 'parent' && (req.user.children || []).some(c => c.toString() === req.params.studentId);
+    if (!isSelf && !isStaff && !isParent) {
+      return res.status(403).json({ message: 'غير مصرح لك بعرض خطة هذا الطالب' });
+    }
+
     const plan = await StudyPlan.findOne({ student: req.params.studentId, type: 'individual' });
     res.json({ plan });
   } catch (error) {
@@ -144,6 +151,12 @@ export const getStudentPlan = async (req, res) => {
 
 export const createStudentPlan = async (req, res) => {
   try {
+    const isSelf = req.user._id.toString() === req.params.studentId;
+    const isStaff = ['admin', 'teacher'].includes(req.user.role);
+    if (!isSelf && !isStaff) {
+      return res.status(403).json({ message: 'غير مصرح لك بإنشاء خطة لهذا الطالب' });
+    }
+
     const existing = await StudyPlan.findOne({ student: req.params.studentId, type: 'individual' });
     if (existing) {
       const plan = await StudyPlan.findByIdAndUpdate(existing._id, req.body, { new: true });
@@ -158,6 +171,12 @@ export const createStudentPlan = async (req, res) => {
 
 export const updateQuranProgress = async (req, res) => {
   try {
+    const isSelf = req.user._id.toString() === req.params.studentId;
+    const isStaff = ['admin', 'teacher'].includes(req.user.role);
+    if (!isSelf && !isStaff) {
+      return res.status(403).json({ message: 'غير مصرح لك بتحديث تقدم هذا الطالب' });
+    }
+
     const { currentJuz, completedJuz, dailyPages, dailyVerses } = req.body;
     const plan = await StudyPlan.findOneAndUpdate(
       { student: req.params.studentId },
@@ -178,6 +197,12 @@ export const updateQuranProgress = async (req, res) => {
 
 export const updateParentApproval = async (req, res) => {
   try {
+    const isParent = req.user.role === 'parent' && (req.user.children || []).some(c => c.toString() === req.params.studentId);
+    const isAdmin = req.user.role === 'admin';
+    if (!isParent && !isAdmin) {
+      return res.status(403).json({ message: 'غير مصرح لك بتسجيل موافقة ولي الأمر لهذا الطالب' });
+    }
+
     const { parentName, parentContact, notes } = req.body;
     const plan = await StudyPlan.findOneAndUpdate(
       { student: req.params.studentId },

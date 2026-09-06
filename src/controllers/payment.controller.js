@@ -159,26 +159,56 @@ export const submitPaymentRequest = async (req, res) => {
       return res.status(400).json({ message: 'يرجى إرفاق صورة إيصال التحويل أو لقطة الشاشة للعملية' });
     }
 
+    // Check if user already has a pending payment request
+    const existingPending = await Payment.findOne({ user: req.user._id, status: 'pending' });
+    if (existingPending) {
+      return res.status(400).json({ message: 'لديك طلب سداد قيد المراجعة بالفعل حالياً. يرجى الانتظار حتى يتم تدقيقه من الإدارة.' });
+    }
+
+    // Check duplicate reference number (if provided)
+    const trimmedRef = (referenceNumber || '').trim();
+    if (trimmedRef) {
+      const duplicateRef = await Payment.findOne({
+        referenceNumber: trimmedRef,
+        status: { $in: ['pending', 'approved'] },
+      });
+      if (duplicateRef) {
+        return res.status(400).json({ message: 'رقم العملية أو الحوالة مسجل مسبقاً في النظام. يرجى التأكد من بيانات الإيصال.' });
+      }
+    }
+
     const receiptUrl = getFileUrl(req, req.file.path);
 
-    // Duration based on billing cycle
-    let activationDurationDays = 30;
-    if (billingCycle === 'quarterly') activationDurationDays = 90;
-    if (billingCycle === 'annual') activationDurationDays = 365;
-
+    // Calculate server-enforced pricing & duration based on settings
     const settings = await PaymentSetting.getSettings();
-    const defaultAmount = currency === 'EGP' ? settings.plan?.priceEGP || 250 : settings.plan?.priceSAR || 49;
+    const basePrice = currency === 'SAR' ? (settings.plan?.priceSAR || 49) : (settings.plan?.priceEGP || 250);
+
+    let activationDurationDays = 30;
+    let calculatedAmount = basePrice;
+
+    if (billingCycle === 'quarterly') {
+      activationDurationDays = 90;
+      const discount = settings.plan?.quarterlyDiscountPercent || 10;
+      calculatedAmount = Math.round(basePrice * 3 * (1 - discount / 100));
+    } else if (billingCycle === 'annual') {
+      activationDurationDays = 365;
+      const discount = settings.plan?.annualDiscountPercent || 20;
+      calculatedAmount = Math.round(basePrice * 12 * (1 - discount / 100));
+    } else {
+      activationDurationDays = 30;
+      calculatedAmount = basePrice;
+    }
 
     const payment = await Payment.create({
       user: req.user._id,
       plan: 'monthly',
       billingCycle,
-      amount: Number(amount) || defaultAmount,
+      amount: calculatedAmount,
       currency,
       method,
       senderPhone: senderPhone || '',
       senderName: senderName || '',
-      referenceNumber: referenceNumber || '',
+      referenceNumber: trimmedRef,
       receiptUrl,
       activationDurationDays,
       notes: notes || '',
@@ -257,28 +287,35 @@ export const getAllPaymentsAdmin = async (req, res) => {
       query.method = method;
     }
 
-    const skip = (Number(page) - 1) * Number(limit);
+    if (search && search.trim()) {
+      const sRegex = new RegExp(search.trim(), 'i');
+      const matchingUsers = await User.find({
+        $or: [
+          { firstName: sRegex },
+          { lastName: sRegex },
+          { email: sRegex },
+          { phone: sRegex },
+        ]
+      }).select('_id');
+      const userIds = matchingUsers.map(u => u._id);
 
-    let payments = await Payment.find(query)
+      query.$or = [
+        { user: { $in: userIds } },
+        { referenceNumber: sRegex },
+        { senderPhone: sRegex },
+        { senderName: sRegex },
+      ];
+    }
+
+    const total = await Payment.countDocuments(query);
+
+    const payments = await Payment.find(query)
       .populate('user', 'firstName lastName email phone avatar assignedLevel subscription')
       .populate('reviewedBy', 'firstName lastName')
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(Number(limit))
       .lean();
-
-    if (search) {
-      const s = search.toLowerCase();
-      payments = payments.filter(p => {
-        const userName = `${p.user?.firstName || ''} ${p.user?.lastName || ''}`.toLowerCase();
-        const email = (p.user?.email || '').toLowerCase();
-        const ref = (p.referenceNumber || '').toLowerCase();
-        const phone = (p.senderPhone || '').toLowerCase();
-        return userName.includes(s) || email.includes(s) || ref.includes(s) || phone.includes(s);
-      });
-    }
-
-    const total = await Payment.countDocuments(query);
 
     // Summary statistics
     const [totalRevenueResult, pendingCount, approvedCount, rejectedCount] = await Promise.all([
@@ -326,57 +363,77 @@ export const approvePaymentAdmin = async (req, res) => {
       return res.status(404).json({ message: 'طلب الدفع غير موجود' });
     }
 
+    if (payment.status !== 'pending') {
+      return res.status(400).json({
+        message: `لا يمكن اعتماد هذا الطلب لأنه تمت مراجعته مسبقاً وهو بحالة "${payment.status === 'approved' ? 'معتمد' : 'مرفوض'}"`
+      });
+    }
+
     const durationDays = Number(customDurationDays) || payment.activationDurationDays || 30;
-    const startDate = new Date();
-    const endDate = new Date(startDate.getTime() + durationDays * 24 * 60 * 60 * 1000);
+    const now = new Date();
+
+    // Fetch user to check current subscription and allow stacking
+    const user = await User.findById(payment.user);
+    if (!user) {
+      return res.status(404).json({ message: 'المستخدم صاحب الطلب غير موجود' });
+    }
+
+    let startDate = now;
+    let endDate;
+
+    // Subscription Stacking: If user already has an active subscription with remaining time, extend it
+    if (user.subscription?.status === 'active' && user.subscription.endDate && new Date(user.subscription.endDate) > now) {
+      startDate = new Date(user.subscription.startDate || now);
+      const currentEnd = new Date(user.subscription.endDate);
+      endDate = new Date(currentEnd.getTime() + durationDays * 24 * 60 * 60 * 1000);
+    } else {
+      endDate = new Date(startDate.getTime() + durationDays * 24 * 60 * 60 * 1000);
+    }
 
     // Update payment record
     payment.status = 'approved';
     payment.activationDurationDays = durationDays;
     payment.reviewedBy = req.user._id;
-    payment.reviewedAt = new Date();
+    payment.reviewedAt = now;
     if (notes) payment.notes = notes;
     await payment.save();
 
     // Update User subscription
-    const user = await User.findById(payment.user);
-    if (user) {
-      user.subscription = {
-        plan: 'monthly',
+    user.subscription = {
+      plan: 'monthly',
+      status: 'active',
+      startDate,
+      endDate,
+      paymentMethod: payment.method,
+      lastPaymentId: payment._id,
+      trialSessionsAttended: 1, // mark trial as converted
+      trialSessionsAllowed: 1,
+    };
+    await user.save();
+
+    // Create notification for student
+    await Notification.create({
+      recipient: user._id,
+      type: 'payment_approved',
+      title: 'تم اعتماد اشتراكك وتفعيل صلاحياتك بنجاح! 🎉',
+      body: `تمت الموافقة على سداد الاشتراك وتفعيل حسابك لمدة ${durationDays} يوماً حتى ${endDate.toLocaleDateString('ar-EG')}. يمكنك الآن حضور كافة الحلقات المباشرة والتفاعل مع مجموعتك بحرية.`,
+      data: { paymentId: payment._id, endDate },
+    });
+
+    // Socket notification to user
+    const io = req.app.get('io');
+    if (io) {
+      io.to(`user:${user._id}`).emit('subscription-updated', {
         status: 'active',
         startDate,
         endDate,
-        paymentMethod: payment.method,
-        lastPaymentId: payment._id,
-        trialSessionsAttended: 1, // mark trial as converted
-        trialSessionsAllowed: 1,
-      };
-      await user.save();
-
-      // Create notification for student
-      await Notification.create({
-        recipient: user._id,
-        type: 'payment_approved',
-        title: 'تم اعتماد اشتراكك وتفعيل صلاحياتك بنجاح! 🎉',
-        body: `تمت الموافقة على سداد الاشتراك الشهري وتفعيل حسابك لمدة ${durationDays} يوماً حتى ${endDate.toLocaleDateString('ar-EG')}. يمكنك الآن حضور كافة الحلقات المباشرة والتفاعل مع مجموعتك بحرية.`,
-        data: { paymentId: payment._id, endDate },
+        canAccessLiveSession: true,
       });
-
-      // Socket notification to user
-      const io = req.app.get('io');
-      if (io) {
-        io.to(`user:${user._id}`).emit('subscription-updated', {
-          status: 'active',
-          startDate,
-          endDate,
-          canAccessLiveSession: true,
-        });
-      }
     }
 
     res.json({
       success: true,
-      message: `تم اعتماد السداد وتفعيل الاشتراك الشهري للمستخدم بنجاح حتى ${endDate.toLocaleDateString('ar-EG')}`,
+      message: `تم اعتماد السداد وتفعيل الاشتراك للمستخدم بنجاح حتى ${endDate.toLocaleDateString('ar-EG')}`,
       payment,
     });
   } catch (error) {
@@ -395,6 +452,12 @@ export const rejectPaymentAdmin = async (req, res) => {
     const payment = await Payment.findById(id);
     if (!payment) {
       return res.status(404).json({ message: 'طلب الدفع غير موجود' });
+    }
+
+    if (payment.status !== 'pending') {
+      return res.status(400).json({
+        message: `لا يمكن رفض هذا الطلب لأنه تمت مراجعته مسبقاً وهو بحالة "${payment.status === 'approved' ? 'معتمد' : 'مرفوض'}"`
+      });
     }
 
     payment.status = 'rejected';
