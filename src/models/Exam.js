@@ -43,6 +43,12 @@ const examSchema = new mongoose.Schema({
     type: String,
     enum: ['student', 'teacher', 'senior'],
   },
+  targetType: {
+    type: String,
+    enum: ['level', 'group', 'individual'],
+    default: 'group',
+  },
+  targetStudent: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   group:        { type: mongoose.Schema.Types.ObjectId, ref: 'Group' },
   lessonId:     { type: String },            // custom lesson _id
   lessonTitle:  { type: String },            // lesson name for display
@@ -57,6 +63,8 @@ const examSchema = new mongoose.Schema({
   allowRetries: { type: Number, default: 3 }, // Number of retries allowed for lesson activities
   isActive:     { type: Boolean, default: true },
 }, { timestamps: true });
+
+examSchema.index({ targetType: 1, targetStudent: 1, group: 1, level: 1 });
 
 const Exam = mongoose.model('Exam', examSchema);
 export default Exam;

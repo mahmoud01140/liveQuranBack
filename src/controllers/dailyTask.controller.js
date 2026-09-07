@@ -25,7 +25,16 @@ export const getTodayTask = async (req, res) => {
     const studentId = req.user._id;
     const user = await User.findById(studentId).populate('group');
 
-    if (!user || !user.group) {
+    let groupId = user?.group?._id || user?.group;
+    if (!groupId) {
+      const foundGroup = await Group.findOne({ students: studentId }).select('_id');
+      if (foundGroup) {
+        groupId = foundGroup._id;
+        User.findByIdAndUpdate(studentId, { group: groupId }).catch(() => {});
+      }
+    }
+
+    if (!groupId) {
       return res.status(404).json({ message: 'الطالب غير مسكن في مجموعة دراسية' });
     }
 
@@ -222,9 +231,18 @@ export const assignStudentDailyTask = async (req, res) => {
     });
 
     if (!task) {
+      let studentGroupId = student.group?._id || student.group;
+      if (!studentGroupId) {
+        const foundGroup = await Group.findOne({ students: studentId }).select('_id');
+        if (foundGroup) {
+          studentGroupId = foundGroup._id;
+          User.findByIdAndUpdate(studentId, { group: studentGroupId }).catch(() => {});
+        }
+      }
+
       task = new DailyTask({
         student: studentId,
-        group: student.group?._id || student.group,
+        group: studentGroupId,
         date: targetDate,
       });
     }

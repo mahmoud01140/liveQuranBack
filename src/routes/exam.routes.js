@@ -7,6 +7,7 @@ import {
   reviewOralResult, getPendingReviews,
   getMyWeakPoints, updateWeakPointStatus,
   getAdminPlacementExams, updatePlacementExam,
+  getStudentAssignedExams, getAdminAllExams,
 } from '../controllers/exam.controller.js';
 import { protect } from '../middleware/auth.middleware.js';
 import { teacherOnly, adminOnly } from '../middleware/role.middleware.js';
@@ -18,6 +19,10 @@ router.use(protect);
 // ── Admin Placement Management ────────────────────────────────────────────────
 router.get('/admin/placement', adminOnly, getAdminPlacementExams);
 router.put('/admin/placement/:registrationType', adminOnly, updatePlacementExam);
+router.get('/admin/all', teacherOnly, getAdminAllExams);
+
+// ── Student Assigned Exams ────────────────────────────────────────
+router.get('/student/assigned', getStudentAssignedExams);
 
 // ── Static paths first (before param routes) ──────────────────────
 router.get('/placement/:type', getPlacementExam);

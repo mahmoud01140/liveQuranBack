@@ -1,6 +1,7 @@
 import Exam from '../models/Exam.js';
 import ExamResult from '../models/ExamResult.js';
 import User from '../models/User.js';
+import Group from '../models/Group.js';
 import WeakPoint from '../models/WeakPoint.js';
 import Notification from '../models/Notification.js';
 import { getFileUrl } from '../middleware/upload.middleware.js';
@@ -61,14 +62,211 @@ export const getGroupExams = async (req, res) => {
   }
 };
 
+// GET /api/exams/student/assigned (All exams assigned to current student: individual, group, or level)
+export const getStudentAssignedExams = async (req, res) => {
+  try {
+    const studentId = req.user._id;
+    const user = await User.findById(studentId);
+    let groupId = user?.group?._id || user?.group;
+
+    if (!groupId) {
+      const foundGroup = await Group.findOne({ students: studentId }).select('_id level');
+      if (foundGroup) {
+        groupId = foundGroup._id;
+        User.findByIdAndUpdate(studentId, { group: groupId }).catch(() => {});
+      }
+    }
+
+    const queryOr = [
+      { targetType: 'individual', targetStudent: studentId, isActive: true },
+    ];
+
+    if (groupId) {
+      queryOr.push(
+        { targetType: 'group', group: groupId, isActive: true },
+        { targetType: { $exists: false }, group: groupId, isActive: true } // backward compatibility
+      );
+    }
+
+    let studentLevel = user?.assignedLevel;
+    if (!studentLevel && groupId) {
+      const g = await Group.findById(groupId).select('level');
+      if (g?.level) studentLevel = g.level;
+    }
+
+    if (studentLevel) {
+      queryOr.push(
+        { targetType: 'level', level: { $in: [studentLevel, 'all'] }, isActive: true }
+      );
+    } else {
+      queryOr.push(
+        { targetType: 'level', level: 'all', isActive: true }
+      );
+    }
+
+    const exams = await Exam.find({ $or: queryOr })
+      .populate('group', 'name level')
+      .populate('targetStudent', 'firstName lastName avatar email')
+      .populate('createdBy', 'firstName lastName avatar')
+      .sort({ createdAt: -1 });
+
+    // Fetch existing results for this student
+    const examIds = exams.map(e => e._id);
+    const results = await ExamResult.find({
+      exam: { $in: examIds },
+      student: studentId,
+    }).select('exam totalPercentage isPassed status submittedAt');
+
+    const resultsMap = {};
+    results.forEach(r => {
+      resultsMap[r.exam.toString()] = r;
+    });
+
+    const enrichedExams = exams.map(examDoc => {
+      const safe = sanitizeExamForStudent(examDoc);
+      const r = resultsMap[examDoc._id.toString()];
+      return {
+        ...safe,
+        isCompleted: !!r,
+        result: r || null,
+      };
+    });
+
+    res.json({ exams: enrichedExams });
+  } catch (error) {
+    res.status(500).json({ message: 'خطأ في جلب الامتحانات المستحقة' });
+  }
+};
+
+// GET /api/exams/admin/all (Admin / Teacher lists all created exams with submission stats)
+export const getAdminAllExams = async (req, res) => {
+  try {
+    const { targetType, groupId, level, search } = req.query;
+    let query = {};
+
+    if (targetType) query.targetType = targetType;
+    if (groupId) query.group = groupId;
+    if (level) query.level = level;
+    if (search) query.title = { $regex: search, $options: 'i' };
+
+    // If teacher (and not admin), only show their created exams or their group's exams
+    if (req.user.role === 'teacher') {
+      const myGroups = await Group.find({ teacher: req.user._id }).select('_id');
+      const groupIds = myGroups.map(g => g._id);
+      query.$or = [
+        { createdBy: req.user._id },
+        { group: { $in: groupIds } }
+      ];
+    }
+
+    const exams = await Exam.find(query)
+      .populate('group', 'name level')
+      .populate('targetStudent', 'firstName lastName avatar email')
+      .populate('createdBy', 'firstName lastName avatar role')
+      .sort({ createdAt: -1 });
+
+    // Count submissions per exam
+    const examIds = exams.map(e => e._id);
+    const resultsCounts = await ExamResult.aggregate([
+      { $match: { exam: { $in: examIds } } },
+      { $group: { _id: '$exam', count: { $sum: 1 }, avgScore: { $avg: '$totalPercentage' } } },
+    ]);
+
+    const statsMap = {};
+    resultsCounts.forEach(stat => {
+      statsMap[stat._id.toString()] = {
+        submissionsCount: stat.count,
+        averageScore: Math.round(stat.avgScore || 0),
+      };
+    });
+
+    const enrichedExams = exams.map(e => {
+      const obj = e.toObject();
+      const stats = statsMap[e._id.toString()] || { submissionsCount: 0, averageScore: 0 };
+      return {
+        ...obj,
+        ...stats,
+      };
+    });
+
+    res.json({ exams: enrichedExams });
+  } catch (error) {
+    res.status(500).json({ message: 'خطأ في جلب الامتحانات' });
+  }
+};
+
 // POST /api/exams
 export const createExam = async (req, res) => {
   try {
-    const examData = { ...req.body, createdBy: req.user._id };
+    const { targetType = 'group', targetStudent, group, level, title, type } = req.body;
+
+    let examType = type;
+    if (!examType) {
+      examType = targetType === 'level' ? 'placement' : 'lesson';
+    }
+
+    const examData = {
+      ...req.body,
+      targetType: targetType || 'group',
+      targetStudent: targetType === 'individual' ? targetStudent : undefined,
+      group: (targetType === 'group' || targetType === 'individual') ? group : undefined,
+      level: targetType === 'level' ? (level || 'all') : undefined,
+      type: examType,
+      createdBy: req.user._id,
+    };
+
     // Calculate total points
     examData.totalPoints = (examData.questions || []).reduce((sum, q) => sum + (q.points || 1), 0);
     const exam = await Exam.create(examData);
-    res.status(201).json({ message: 'تم إنشاء الامتحان', exam });
+
+    // Send notifications to students
+    const io = req.app.get('io');
+    if (targetType === 'individual' && targetStudent) {
+      await Notification.create({
+        recipient: targetStudent,
+        type: 'exam',
+        title: `🎯 تم إسناد امتحان فردي خاص بك: ${exam.title}`,
+        body: 'أعد لك المعلم امتحاناً فردياً للمتابعة وتثبيت المحفوظ. تفضل بأدائه في قسم المطلوب منك.',
+        data: { examId: exam._id, link: `/student/exams/${exam._id}/take` },
+      });
+      if (io) io.emitToUser(targetStudent, 'exam-assigned', { examId: exam._id, title: exam.title, targetType: 'individual' });
+    } else if (targetType === 'group' && group) {
+      const groupDoc = await Group.findById(group).select('students');
+      if (groupDoc && groupDoc.students?.length) {
+        const notifs = groupDoc.students.map(sId =>
+          Notification.create({
+            recipient: sId,
+            type: 'exam',
+            title: `📝 امتحان جديد للمجموعة: ${exam.title}`,
+            body: 'تم نشر امتحان جديد لمجموعتك، يرجى الدخول وأدائه.',
+            data: { examId: exam._id, link: `/student/exams/${exam._id}/take` },
+          })
+        );
+        await Promise.allSettled(notifs);
+        if (io) io.to(`group:${group}`).emit('exam-assigned', { examId: exam._id, title: exam.title, targetType: 'group' });
+      }
+    } else if (targetType === 'level') {
+      const studentFilter = { role: 'student' };
+      if (level && level !== 'all') {
+        studentFilter.assignedLevel = level;
+      }
+      const students = await User.find(studentFilter).select('_id');
+      if (students?.length) {
+        const notifs = students.map(s =>
+          Notification.create({
+            recipient: s._id,
+            type: 'exam',
+            title: `🏷️ امتحان مستوى جديد: ${exam.title}`,
+            body: 'تم إدراج امتحان مستوى جديد في حسابك، يرجى أداء التقييم.',
+            data: { examId: exam._id, link: `/student/exams/${exam._id}/take` },
+          })
+        );
+        await Promise.allSettled(notifs);
+      }
+      if (io) io.emit('exam-assigned', { examId: exam._id, title: exam.title, targetType: 'level' });
+    }
+
+    res.status(201).json({ message: 'تم إنشاء الامتحان بنجاح', exam });
   } catch (error) {
     res.status(500).json({ message: 'خطأ في إنشاء الامتحان' });
   }

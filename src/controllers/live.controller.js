@@ -311,9 +311,18 @@ export const getActiveSession = async (req, res) => {
     const subStatus = await evaluateUserSubscription(user);
 
     let query = { status: 'live' };
-    const groupId = user.group?._id || user.group;
+    let groupId = user.group?._id || user.group;
 
     if (user.role === 'student') {
+      // Fallback: If user.group is not populated on user model, search Group model
+      if (!groupId) {
+        const foundGroup = await Group.findOne({ students: user._id }).select('_id');
+        if (foundGroup) {
+          groupId = foundGroup._id;
+          User.findByIdAndUpdate(user._id, { group: groupId }).catch(() => {});
+        }
+      }
+
       // Must have an assigned group
       if (!groupId) {
         return res.json({ session: null, subscription: subStatus });
@@ -330,6 +339,16 @@ export const getActiveSession = async (req, res) => {
     if (session) {
       sessionObj = session.toObject ? session.toObject() : { ...session };
       sessionObj.liveRoomName = getSecureLiveRoomName(session._id);
+
+      // If student already joined this ongoing session, permit them to re-enter
+      if (user.role === 'student') {
+        const alreadyAttended = session.attendees?.some(
+          a => (a.student?._id || a.student)?.toString() === user._id.toString()
+        );
+        if (alreadyAttended) {
+          subStatus.canAccessLiveSession = true;
+        }
+      }
     }
 
     res.json({
@@ -361,6 +380,15 @@ export const getSessionById = async (req, res) => {
     }
 
     const subStatus = await evaluateUserSubscription(req.user);
+    if (req.user.role === 'student' && session.status === 'live') {
+      const alreadyAttended = session.attendees?.some(
+        a => (a.student?._id || a.student)?.toString() === req.user._id.toString()
+      );
+      if (alreadyAttended) {
+        subStatus.canAccessLiveSession = true;
+      }
+    }
+
     const sessionObj = session.toObject ? session.toObject() : { ...session };
     sessionObj.liveRoomName = getSecureLiveRoomName(session._id);
 
@@ -469,43 +497,54 @@ export const joinSession = async (req, res) => {
         return res.status(403).json({ message: 'غير مصرح لك بحضور هذه الجلسة لأنك لست مسجلاً في هذه المجموعة' });
       }
 
-      const user = await User.findById(req.user._id);
-      const subStatus = await evaluateUserSubscription(user);
+      // Check if student has ALREADY joined this ongoing session
+      const alreadyJoined = session.attendees.some(
+        a => (a.student?._id || a.student)?.toString() === req.user._id.toString()
+      );
 
-      if (!subStatus.canAccessLiveSession) {
-        return res.status(403).json({
-          accessDenied: true,
-          reason: 'subscription_required',
-          message: 'انتهت المحاضرة التجريبية المجانية أو انتهى اشتراكك الشهري. يرجى سداد الاشتراك لمتابعة حضور الحلقات.',
-          subscription: subStatus,
-        });
+      // Only check subscription and mark trial if joining for the first time
+      if (!alreadyJoined) {
+        const user = await User.findById(req.user._id);
+        const subStatus = await evaluateUserSubscription(user);
+
+        if (!subStatus.canAccessLiveSession) {
+          return res.status(403).json({
+            accessDenied: true,
+            reason: 'subscription_required',
+            message: 'انتهت المحاضرة التجريبية المجانية أو انتهى اشتراكك الشهري. يرجى سداد الاشتراك لمتابعة حضور الحلقات.',
+            subscription: subStatus,
+          });
+        }
+
+        // If user is consuming their 1 free trial session, mark it
+        if (subStatus.isTrial && (user.subscription?.trialSessionsAttended || 0) === 0) {
+          if (!user.subscription) user.subscription = {};
+          user.subscription.trialSessionsAttended = 1;
+          user.subscription.status = 'trial';
+          await user.save();
+
+          // Create in-app milestone notification
+          await Notification.create({
+            recipient: user._id,
+            type: 'plan_updated',
+            title: '🎉 حضرت جلستك التجريبية المجانية الأولى بنجاح!',
+            body: 'أهلاً بك في منصتنا! للاستمرار في حضور الحلقات القادمة والتفاعل مع مجموعتك، يرجى تفعيل اشتراكك الشهري عبر فودافون كاش أو انستاباي.',
+            data: { link: '/student/subscription', trialCompleted: true },
+          });
+        }
+
+        session.attendees.push({ student: req.user._id, joinedAt: new Date() });
+        await session.save();
       }
-
-      // If user is consuming their 1 free trial session, mark it
-      if (subStatus.isTrial && (user.subscription?.trialSessionsAttended || 0) === 0) {
-        if (!user.subscription) user.subscription = {};
-        user.subscription.trialSessionsAttended = 1;
-        user.subscription.status = 'trial';
-        await user.save();
-
-        // Create in-app milestone notification
-        await Notification.create({
-          recipient: user._id,
-          type: 'plan_updated',
-          title: '🎉 حضرت جلستك التجريبية المجانية الأولى بنجاح!',
-          body: 'أهلاً بك في منصتنا! للاستمرار في حضور الحلقات القادمة والتفاعل مع مجموعتك، يرجى تفعيل اشتراكك الشهري عبر فودافون كاش أو انستاباي.',
-          data: { link: '/student/subscription', trialCompleted: true },
-        });
+    } else {
+      // Teacher or admin
+      const alreadyJoined = session.attendees.some(
+        a => (a.student?._id || a.student)?.toString() === req.user._id.toString()
+      );
+      if (!alreadyJoined) {
+        session.attendees.push({ student: req.user._id, joinedAt: new Date() });
+        await session.save();
       }
-    }
-
-    // Prevent duplicate attendee records on page refresh
-    const alreadyJoined = session.attendees.some(
-      a => a.student.toString() === req.user._id.toString()
-    );
-    if (!alreadyJoined) {
-      session.attendees.push({ student: req.user._id, joinedAt: new Date() });
-      await session.save();
     }
 
     const sessionObj = session.toObject ? session.toObject() : { ...session };
