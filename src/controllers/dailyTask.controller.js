@@ -49,56 +49,9 @@ export const getTodayTask = async (req, res) => {
     });
 
     if (!task) {
-      // Intelligently generate portions based on previous records
-      const lastRecord = await DailyRecord.findOne({ student: studentId })
-        .sort({ createdAt: -1 });
-
-      let newSurah = 114; // Default starting from An-Nas or placement
-      let fromV = 1;
-      let toV = 6;
-
-      if (lastRecord) {
-        newSurah = lastRecord.surahNumber || 114;
-        fromV = (lastRecord.toVerse || 1) + 1;
-        toV = fromV + 10;
-      }
-
-      const surahName = SURAH_NAMES[newSurah - 1] || `سورة ${newSurah}`;
-      const nearSurahNum = Math.min(114, newSurah + 1);
-      const nearSurahName = SURAH_NAMES[nearSurahNum - 1] || `سورة ${nearSurahNum}`;
-
-      // Calculate cumulative revision cycle (e.g. Juz 30 or 29)
-      const dayOfMonth = new Date().getDate();
-      const cumulativeJuz = (dayOfMonth % 30) + 1;
-
-      task = await DailyTask.create({
-        student: studentId,
-        group: user.group._id,
-        date: new Date(),
-        newHifz: {
-          surahNumber: newSurah,
-          surahName,
-          fromVerse: fromV,
-          toVerse: toV,
-          versesCount: toV - fromV + 1,
-          status: 'pending'
-        },
-        nearRevision: {
-          surahNumber: nearSurahNum,
-          surahName: nearSurahName,
-          fromVerse: 1,
-          toVerse: 20,
-          versesCount: 20,
-          status: 'pending'
-        },
-        cumulativeRevision: {
-          juzNumber: cumulativeJuz,
-          surahName: `الجزء ${cumulativeJuz}`,
-          fromVerse: 1,
-          toVerse: 1,
-          status: 'pending'
-        },
-        overallStatus: 'pending'
+      return res.json({
+        task: null,
+        message: 'لم يتم تحديد الورد اليومي بعد. سيقوم المعلم بتحديده لك أثناء جلسة التسميع المباشرة.'
       });
     }
 
@@ -127,13 +80,9 @@ export const updatePortionStatus = async (req, res) => {
       p => task[p]?.status === 'completed' || task[p]?.status === 'reviewed'
     );
 
-    if (allCompleted) {
-      task.overallStatus = 'completed';
-      // Award student XP points
-      await User.findByIdAndUpdate(task.student, { $inc: { points: 15 } });
-    } else {
-      task.overallStatus = 'in_progress';
-    }
+    task.overallStatus = allCompleted ? 'completed' : 'in_progress';
+    // NOTE: Points are NOT self-awarded by student clicking; points are only awarded
+    // by teacher/admin during live recitation evaluation or passing exams.
 
     await task.save();
     res.json({ message: 'تم تحديث حالة الورد بنجاح', task });

@@ -1256,16 +1256,17 @@ export const evaluateRecitationTurn = async (req, res) => {
 
       await task.save();
 
-      // Award XP points for live recitation
-      await User.findByIdAndUpdate(studentId, { $inc: { points: 20 } });
+      // Award XP points for live recitation based on teacher/admin evaluation quality
+      const earnedPoints = Math.max(5, Math.round((Number(score || 100) / 100) * 25));
+      await User.findByIdAndUpdate(studentId, { $inc: { points: earnedPoints } });
 
       // Notify student
       await Notification.create({
         recipient: studentId,
         type: 'grade_posted',
         title: '⭐ تم تقييم تسميعك في الحصة المباشرة!',
-        body: `حصلت على تقييم ${rating} نجوم (الدرجة: ${score}%) في جلسة ${session.title}`,
-        data: { sessionId: session._id, link: '/student/daily-tracker' },
+        body: `حصلت على تقييم ${rating} نجوم (الدرجة: ${score}%) وكسبت +${earnedPoints} نقطة تميز في جلسة ${session.title}`,
+        data: { sessionId: session._id, link: '/student/curriculum' },
       });
     }
 
