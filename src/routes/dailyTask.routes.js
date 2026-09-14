@@ -5,6 +5,7 @@ import {
   reviewDailyTask,
   getGroupTodayTasks,
   assignStudentDailyTask,
+  assignWeeklyPlan,
 } from '../controllers/dailyTask.controller.js';
 import { protect } from '../middleware/auth.middleware.js';
 
@@ -16,5 +17,6 @@ router.put('/:id/portion', updatePortionStatus);
 router.put('/:id/review', reviewDailyTask);
 router.get('/group/:groupId/today', getGroupTodayTasks);
 router.put('/student/:studentId/assign', assignStudentDailyTask);
+router.post('/student/:studentId/weekly-plan', assignWeeklyPlan);
 
 export default router;

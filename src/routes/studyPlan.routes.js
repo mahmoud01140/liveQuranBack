@@ -2,7 +2,7 @@ import express from 'express';
 import {
   getGroupPlan, createGroupPlan, getGroupFullPlan,
   assignCurriculumToGroup,
-  addCustomLesson, updateCustomLesson, deleteCustomLesson,
+  addCustomLesson, updateCustomLesson, deleteCustomLesson, toggleLessonComplete,
   getStudentPlan, createStudentPlan,
   updateQuranProgress, updateParentApproval,
 } from '../controllers/studyPlan.controller.js';
@@ -32,6 +32,7 @@ router.put('/group/:groupId/curriculum', adminOnly, assignCurriculumToGroup);
 // Custom lessons (admin/teacher)
 router.post('/group/:groupId/lessons', allowAdminOrTeacher, addCustomLesson);
 router.put('/group/:groupId/lessons/:lessonId', allowAdminOrTeacher, updateCustomLesson);
+router.put('/group/:groupId/lessons/:lessonId/toggle-complete', allowAdminOrTeacher, toggleLessonComplete);
 router.delete('/group/:groupId/lessons/:lessonId', allowAdminOrTeacher, deleteCustomLesson);
 
 // Student individual plan

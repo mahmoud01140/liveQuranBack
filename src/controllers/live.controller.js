@@ -251,7 +251,7 @@ export const getGroupSessions = async (req, res) => {
 // POST /api/live
 export const createSession = async (req, res) => {
   try {
-    const { groupId, title, scheduledAt, sessionType, notes, homework, quranHomework } = req.body;
+    const { groupId, title, scheduledAt, sessionType, notes, homework, quranHomework, lessonCovered, lessonTitle } = req.body;
 
     if (!groupId || !title?.trim()) {
       return res.status(400).json({ message: 'معرّف المجموعة وعنوان الجلسة مطلوبان' });
@@ -265,15 +265,29 @@ export const createSession = async (req, res) => {
       }
     }
 
+    let finalHomework = homework;
+    let finalQuranHomework = quranHomework;
+    if (!finalHomework && lessonCovered) {
+      try {
+        const StudyPlan = (await import('../models/StudyPlan.js')).default;
+        const plan = await StudyPlan.findOne({ group: groupId, type: 'group' });
+        const lesson = plan?.customLessons?.id(lessonCovered);
+        if (lesson?.defaultHomework) finalHomework = lesson.defaultHomework;
+        if (!finalQuranHomework && lesson?.defaultQuranHomework?.surahName) finalQuranHomework = lesson.defaultQuranHomework;
+      } catch (_) {}
+    }
+
     const session = await LiveSession.create({
       group: groupId,
       teacher: req.user._id,
       title,
       scheduledAt,
       sessionType: sessionType || 'lesson',
+      lessonCovered: lessonCovered || undefined,
+      lessonTitle: lessonTitle || title,
       notes,
-      homework,
-      quranHomework,
+      homework: finalHomework,
+      quranHomework: finalQuranHomework,
     });
 
     // Notify group students
@@ -475,6 +489,67 @@ export const endSession = async (req, res) => {
 
     // Update group total sessions
     await Group.findByIdAndUpdate(targetGroupId, { $inc: { totalSessions: 1 } });
+
+    // Auto-mark linked lesson as completed in the group's study plan
+    if (session.lessonCovered && targetGroupId) {
+      try {
+        const StudyPlan = (await import('../models/StudyPlan.js')).default;
+        const User = (await import('../models/User.js')).default;
+        const Notification = (await import('../models/Notification.js')).default;
+        const plan = await StudyPlan.findOne({ group: targetGroupId, type: 'group' });
+        if (plan) {
+          const lesson = plan.customLessons.id(session.lessonCovered);
+          if (lesson && lesson.status !== 'completed') {
+            lesson.status = 'completed';
+            lesson.completedAt = new Date();
+            lesson.completedBySessionId = session._id;
+            await plan.save();
+          }
+
+          // Auto-assign default homework if session didn't have one
+          if (!session.homework && (lesson?.defaultHomework || lesson?.defaultQuranHomework?.surahName)) {
+            session.homework = lesson.defaultHomework || `واجب درس: ${lesson.title}`;
+            session.homeworkDeadline = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
+            if (lesson.defaultQuranHomework?.surahName) {
+              session.quranHomework = lesson.defaultQuranHomework;
+            }
+            await session.save();
+
+            if (io) {
+              io.to(`group:${targetGroupId}`).emit('homework-updated', {
+                sessionId: session._id,
+                homework: session.homework,
+                quranHomework: session.quranHomework,
+                homeworkDeadline: session.homeworkDeadline,
+              });
+            }
+          }
+
+          // Sync student completed lessons for group students
+          const groupDoc = await Group.findById(targetGroupId).select('students');
+          const studentIds = groupDoc?.students || [];
+          if (studentIds.length > 0) {
+            await User.updateMany(
+              { _id: { $in: studentIds } },
+              { $addToSet: { completedLessons: session.lessonCovered } }
+            );
+
+            // Check if all lessons in customLessons are now completed!
+            const allCompleted = plan.customLessons?.length > 0 && plan.customLessons.every(l => l.status === 'completed');
+            if (allCompleted) {
+              const notifs = studentIds.map(stId => ({
+                recipient: stId,
+                type: 'plan_updated',
+                title: 'مبارك إتمام المنهج الدراسي بنجاح! 🎓🎉',
+                body: 'لقد أتمت مجموعتكم جميع دروس المنهج المقرر. استعد للاختبار الشامل النهائي والترقية للمستوى التالي!',
+                data: { groupId: targetGroupId, planId: plan._id, completed: true }
+              }));
+              await Notification.insertMany(notifs).catch(() => {});
+            }
+          }
+        }
+      } catch (_) { /* non-critical: don't fail the end-session if lesson update fails */ }
+    }
 
     res.json({ message: 'تم إنهاء البث', session });
   } catch (error) {

@@ -63,10 +63,22 @@ export const assignCurriculumToGroup = async (req, res) => {
 export const addCustomLesson = async (req, res) => {
   try {
     const plan = await getOrCreateGroupPlan(req.params.groupId);
-    const { title, description, type, duration, isLiveRequired, resources } = req.body;
+    const { title, description, type, duration, isLiveRequired, resources, defaultHomework, defaultQuranHomework } = req.body;
 
     const lessonNumber = (plan.customLessons.length || 0) + 1;
-    const lesson = { title, description, type, duration, isLiveRequired, resources, lessonNumber, order: lessonNumber };
+    const lesson = {
+      title,
+      description,
+      type,
+      duration,
+      isLiveRequired,
+      resources,
+      defaultHomework,
+      defaultQuranHomework,
+      lessonNumber,
+      order: lessonNumber,
+      status: 'pending',
+    };
 
     plan.customLessons.push(lesson);
     await plan.save();
@@ -99,6 +111,46 @@ export const updateCustomLesson = async (req, res) => {
     res.json({ message: 'تم تعديل الدرس', plan: updated });
   } catch (error) {
     res.status(500).json({ message: 'خطأ في تعديل الدرس' });
+  }
+};
+
+// PUT /api/study-plans/group/:groupId/lessons/:lessonId/toggle-complete — toggle lesson completion status
+export const toggleLessonComplete = async (req, res) => {
+  try {
+    const plan = await StudyPlan.findOne({ group: req.params.groupId, type: 'group' });
+    if (!plan) return res.status(404).json({ message: 'الخطة غير موجودة' });
+
+    const lesson = plan.customLessons.id(req.params.lessonId);
+    if (!lesson) return res.status(404).json({ message: 'الدرس غير موجود' });
+
+    const isNowCompleted = lesson.status !== 'completed';
+    lesson.status = isNowCompleted ? 'completed' : 'pending';
+    lesson.completedAt = isNowCompleted ? new Date() : null;
+    await plan.save();
+
+    // Sync with group students
+    const groupDoc = await Group.findById(req.params.groupId).select('students');
+    const studentIds = groupDoc?.students || [];
+    if (studentIds.length > 0) {
+      const User = (await import('../models/User.js')).default;
+      if (isNowCompleted) {
+        await User.updateMany(
+          { _id: { $in: studentIds } },
+          { $addToSet: { completedLessons: lesson._id } }
+        );
+      } else {
+        await User.updateMany(
+          { _id: { $in: studentIds } },
+          { $pull: { completedLessons: lesson._id } }
+        );
+      }
+    }
+
+    const updated = await StudyPlan.findById(plan._id)
+      .populate('curriculum', 'title level description units estimatedWeeks');
+    res.json({ message: isNowCompleted ? 'تم تحديد الدرس كمكتمل ✅' : 'تم إلغاء إكمال الدرس', plan: updated });
+  } catch (error) {
+    res.status(500).json({ message: 'خطأ في تحديث حالة الدرس' });
   }
 };
 

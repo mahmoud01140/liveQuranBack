@@ -26,6 +26,22 @@ const customLessonSchema = new mongoose.Schema({
   isLiveRequired: { type: Boolean, default: false },
   resources:      { type: String },
   order:          { type: Number, default: 0 },
+  // Completion tracking — auto-set when the linked broadcast ends
+  status: {
+    type: String,
+    enum: ['pending', 'in_progress', 'completed'],
+    default: 'pending',
+  },
+  completedAt:          { type: Date },
+  completedBySessionId: { type: mongoose.Schema.Types.ObjectId, ref: 'LiveSession' },
+  // Default homework for this lesson
+  defaultHomework:      { type: String },
+  defaultQuranHomework: {
+    surahName: { type: String },
+    fromVerse: { type: Number },
+    toVerse:   { type: Number },
+    type:      { type: String, enum: ['hifz', 'recitation', 'tajweed', 'exercise'], default: 'hifz' },
+  },
 }, { timestamps: true });
 
 const studyPlanSchema = new mongoose.Schema({

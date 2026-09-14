@@ -294,3 +294,168 @@ export const assignStudentDailyTask = async (req, res) => {
   }
 };
 
+// POST /api/daily-tasks/student/:studentId/weekly-plan (Teacher sets weekly plan for student)
+export const assignWeeklyPlan = async (req, res) => {
+  try {
+    const { studentId } = req.params;
+    const { days, pacing } = req.body;
+
+    const student = await User.findById(studentId).populate('group');
+    if (!student) return res.status(404).json({ message: 'الطالب غير موجود' });
+
+    let studentGroupId = student.group?._id || student.group;
+    if (!studentGroupId) {
+      const foundGroup = await Group.findOne({ students: studentId }).select('_id');
+      if (foundGroup) {
+        studentGroupId = foundGroup._id;
+        User.findByIdAndUpdate(studentId, { group: studentGroupId }).catch(() => {});
+      }
+    }
+
+    const createdTasks = [];
+
+    // Mode A: Explicit days array provided
+    if (Array.isArray(days) && days.length > 0) {
+      for (const dayPlan of days) {
+        const targetDate = new Date(dayPlan.date);
+        const startOfDay = new Date(targetDate);
+        startOfDay.setHours(0, 0, 0, 0);
+        const endOfDay = new Date(targetDate);
+        endOfDay.setHours(23, 59, 59, 999);
+
+        let task = await DailyTask.findOne({
+          student: studentId,
+          date: { $gte: startOfDay, $lte: endOfDay },
+        });
+
+        if (!task) {
+          task = new DailyTask({
+            student: studentId,
+            group: studentGroupId,
+            date: targetDate,
+          });
+        }
+
+        if (dayPlan.newHifz) {
+          task.newHifz = {
+            surahNumber: dayPlan.newHifz.surahNumber || 114,
+            surahName: dayPlan.newHifz.surahName || (SURAH_NAMES[(dayPlan.newHifz.surahNumber || 114) - 1] || ''),
+            fromVerse: dayPlan.newHifz.fromVerse || 1,
+            toVerse: dayPlan.newHifz.toVerse || 5,
+            versesCount: (dayPlan.newHifz.toVerse && dayPlan.newHifz.fromVerse)
+              ? (dayPlan.newHifz.toVerse - dayPlan.newHifz.fromVerse + 1)
+              : 5,
+            status: task.newHifz?.status || 'pending',
+          };
+        }
+
+        if (dayPlan.nearRevision) {
+          task.nearRevision = {
+            surahNumber: dayPlan.nearRevision.surahNumber || 113,
+            surahName: dayPlan.nearRevision.surahName || (SURAH_NAMES[(dayPlan.nearRevision.surahNumber || 113) - 1] || ''),
+            fromVerse: dayPlan.nearRevision.fromVerse || 1,
+            toVerse: dayPlan.nearRevision.toVerse || 10,
+            versesCount: (dayPlan.nearRevision.toVerse && dayPlan.nearRevision.fromVerse)
+              ? (dayPlan.nearRevision.toVerse - dayPlan.nearRevision.fromVerse + 1)
+              : 10,
+            status: task.nearRevision?.status || 'pending',
+          };
+        }
+
+        if (dayPlan.cumulativeRevision) {
+          task.cumulativeRevision = {
+            juzNumber: dayPlan.cumulativeRevision.juzNumber || 30,
+            surahName: dayPlan.cumulativeRevision.surahName || `الجزء ${dayPlan.cumulativeRevision.juzNumber || 30}`,
+            fromVerse: 1,
+            toVerse: 1,
+            status: task.cumulativeRevision?.status || 'pending',
+          };
+        }
+
+        if (dayPlan.teacherNotes) {
+          task.teacherNotes = dayPlan.teacherNotes;
+        }
+
+        task.reviewedBy = req.user._id;
+        await task.save();
+        createdTasks.push(task);
+      }
+    } else if (pacing) {
+      // Mode B: Generate automated progression for next N days
+      const daysCount = pacing.daysCount || 7;
+      const startDate = pacing.startDate ? new Date(pacing.startDate) : new Date();
+      let curFrom = Number(pacing.startVerse) || 1;
+      const vPerDay = Number(pacing.versesPerDay) || 5;
+      const surahNum = Number(pacing.surahNumber) || 114;
+      const surahName = pacing.surahName || (SURAH_NAMES[surahNum - 1] || '');
+
+      for (let i = 0; i < daysCount; i++) {
+        const d = new Date(startDate);
+        d.setDate(d.getDate() + i);
+
+        const startOfDay = new Date(d);
+        startOfDay.setHours(0, 0, 0, 0);
+        const endOfDay = new Date(d);
+        endOfDay.setHours(23, 59, 59, 999);
+
+        let task = await DailyTask.findOne({
+          student: studentId,
+          date: { $gte: startOfDay, $lte: endOfDay },
+        });
+
+        if (!task) {
+          task = new DailyTask({
+            student: studentId,
+            group: studentGroupId,
+            date: d,
+          });
+        }
+
+        const curTo = curFrom + vPerDay - 1;
+
+        task.newHifz = {
+          surahNumber: surahNum,
+          surahName,
+          fromVerse: curFrom,
+          toVerse: curTo,
+          versesCount: vPerDay,
+          status: task.newHifz?.status || 'pending',
+        };
+
+        if (pacing.nearRevisionSurah) {
+          const nearSNum = Number(pacing.nearRevisionSurah);
+          task.nearRevision = {
+            surahNumber: nearSNum,
+            surahName: SURAH_NAMES[nearSNum - 1] || '',
+            fromVerse: 1,
+            toVerse: 20,
+            versesCount: 20,
+            status: task.nearRevision?.status || 'pending',
+          };
+        }
+
+        if (pacing.cumulativeJuz) {
+          const cJuz = Number(pacing.cumulativeJuz);
+          task.cumulativeRevision = {
+            juzNumber: cJuz,
+            surahName: `الجزء ${cJuz}`,
+            fromVerse: 1,
+            toVerse: 1,
+            status: task.cumulativeRevision?.status || 'pending',
+          };
+        }
+
+        task.reviewedBy = req.user._id;
+        await task.save();
+        createdTasks.push(task);
+
+        curFrom = curTo + 1;
+      }
+    }
+
+    res.json({ message: `تم اعتماد خطة الورد الأسبوعية بنجاح (${createdTasks.length} أيام) 📅✨`, tasks: createdTasks });
+  } catch (error) {
+    res.status(500).json({ message: 'خطأ في اعتماد خطة الورد الأسبوعية' });
+  }
+};
+
