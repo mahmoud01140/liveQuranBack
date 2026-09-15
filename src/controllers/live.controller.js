@@ -610,6 +610,15 @@ export const joinSession = async (req, res) => {
 
         session.attendees.push({ student: req.user._id, joinedAt: new Date() });
         await session.save();
+      } else {
+        // الطالب عاد مرة أخرى بعد مغادرته → نمسح leftAt ليظهر "متصل" مجدداً
+        const attendee = session.attendees.find(
+          a => (a.student?._id || a.student)?.toString() === req.user._id.toString()
+        );
+        if (attendee && attendee.leftAt) {
+          attendee.leftAt = undefined;
+          await session.save();
+        }
       }
     } else {
       // Teacher or admin
@@ -757,7 +766,27 @@ export const getAttendanceSheet = async (req, res) => {
       const rawAttendee = attendeesMap.get(sId);
       const existingRecord = recordsMap.get(sId);
 
-      const isConnectedNow = !!rawAttendee && (!rawAttendee.leftAt || session.status === 'live');
+      // الطالب متصل الآن إذا: لديه سجل حضور + لم يغادر (leftAt غير موجود)
+      const isConnectedNow = !!rawAttendee && !rawAttendee.leftAt;
+
+      // تحديد الحالة الافتراضية:
+      // - إذا تم رصد حالته يدوياً → نستخدمها
+      // - إذا متصل الآن → حاضر
+      // - إذا انضم ثم غادر (leftAt موجود) → غائب
+      // - إذا لم ينضم أبداً → غائب
+      // تحديد الحالة:
+      // - إذا انضم ثم غادر (leftAt موجود) → يظهر "غائب" عند إعادة تحميل الكشف
+      // - إذا متصل الآن → حاضر (أو حالته المسجلة مسبقاً إذا وُجدت)
+      // - إذا لم ينضم أبداً → غائب (أو حالته المسجلة مسبقاً)
+      let finalStatus = 'absent';
+      if (rawAttendee?.leftAt) {
+        // غادر الجلسة → غائب مؤكد عند إعادة التحميل (إلا لو معذور يدوياً)
+        finalStatus = existingRecord?.status === 'excused' ? 'excused' : 'absent';
+      } else if (existingRecord) {
+        finalStatus = existingRecord.status;
+      } else if (rawAttendee) {
+        finalStatus = 'present';
+      }
 
       return {
         student: {
@@ -769,11 +798,12 @@ export const getAttendanceSheet = async (req, res) => {
           phone: student.phone,
           assignedLevel: student.assignedLevel
         },
-        status: existingRecord ? existingRecord.status : (rawAttendee ? 'present' : 'absent'),
+        status: finalStatus,
         notes: existingRecord?.notes || '',
         markedBy: existingRecord?.markedBy || null,
         markedAt: existingRecord?.markedAt || null,
         joinedAt: rawAttendee?.joinedAt || existingRecord?.joinedAt || null,
+        leftAt: rawAttendee?.leftAt || existingRecord?.leftAt || null,
         durationMinutes: rawAttendee?.duration || existingRecord?.durationMinutes || 0,
         isOnline: isConnectedNow
       };

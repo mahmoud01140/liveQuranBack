@@ -228,6 +228,40 @@ export const initSocket = (io) => {
       });
     });
 
+    // ─── Leave Session (update leftAt for attendance tracking) ─────
+    socket.on('leave-session', async ({ sessionId, groupId }) => {
+      if (!requireAuth()) return;
+      if (!sessionId) return;
+      try {
+        const session = await LiveSession.findOneAndUpdate(
+          {
+            _id: sessionId,
+            attendees: {
+              $elemMatch: {
+                student: socket.userId,
+                $or: [{ leftAt: { $exists: false } }, { leftAt: null }],
+              },
+            },
+          },
+          {
+            $set: { 'attendees.$.leftAt': new Date() },
+          },
+          { new: true }
+        );
+        const targetGroup = groupId || session?.group;
+        if (targetGroup) {
+          io.to(`group:${targetGroup}`).emit('student-left-session', {
+            sessionId,
+            studentId: socket.userId,
+            leftAt: new Date(),
+          });
+        }
+        console.log(`👋 Student ${socket.userId} left session ${sessionId}`);
+      } catch (err) {
+        console.error('leave-session error:', err.message);
+      }
+    });
+
     // ─── Progress ─────────────────────────────────────────────────
     socket.on('lesson-completed', ({ lessonId, groupId }) => {
       socket.to(`group:${groupId}`).emit('progress-updated', {
@@ -335,8 +369,47 @@ export const initSocket = (io) => {
     });
 
     // ─── Disconnect ───────────────────────────────────────────────
-    socket.on('disconnect', () => {
+    socket.on('disconnect', async () => {
       if (socket.userId) {
+        // Mark leftAt for any live sessions this user was attending
+        try {
+          const sessions = await LiveSession.find({
+            status: 'live',
+            attendees: {
+              $elemMatch: {
+                student: socket.userId,
+                $or: [{ leftAt: { $exists: false } }, { leftAt: null }],
+              },
+            },
+          }).select('_id group');
+
+          for (const s of sessions) {
+            await LiveSession.updateOne(
+              {
+                _id: s._id,
+                attendees: {
+                  $elemMatch: {
+                    student: socket.userId,
+                    $or: [{ leftAt: { $exists: false } }, { leftAt: null }],
+                  },
+                },
+              },
+              {
+                $set: { 'attendees.$.leftAt': new Date() },
+              }
+            );
+            if (s.group) {
+              io.to(`group:${s.group}`).emit('student-left-session', {
+                sessionId: s._id,
+                studentId: socket.userId,
+                leftAt: new Date(),
+              });
+            }
+          }
+        } catch (err) {
+          console.error('Disconnect attendance update error:', err.message);
+        }
+
         const sockets = userSockets.get(socket.userId);
         if (sockets) {
           sockets.delete(socket.id);
