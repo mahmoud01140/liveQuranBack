@@ -9,6 +9,7 @@
     "dev": "nodemon src/server.js",
     "seed": "node src/seed.js",
     "create-admin": "node src/createAdmin.js",
+    "auto-verify": "node src/scripts/autoVerify.js",
     "test": "vitest run"
   },
   "dependencies": {

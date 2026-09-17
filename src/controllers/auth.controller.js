@@ -28,8 +28,13 @@ export const register = async (req, res) => {
       return res.status(400).json({ message: 'البريد الإلكتروني مسجل مسبقاً' });
     }
 
-    const otp = generateOTP();
-    const otpExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+    // TEMPORARY testing bypass (reversible): set SKIP_EMAIL_VERIFICATION=true
+    // to auto-verify accounts and skip OTP/email entirely. Unset the var to
+    // restore the full verification flow — no code revert needed.
+    const skipVerification = process.env.SKIP_EMAIL_VERIFICATION === 'true';
+
+    const otp = skipVerification ? undefined : generateOTP();
+    const otpExpires = skipVerification ? undefined : new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
 
     const user = await User.create({
       firstName: firstName.trim(), lastName: lastName.trim(),
@@ -37,21 +42,26 @@ export const register = async (req, res) => {
       phone: phone?.trim(), country, dateOfBirth, gender,
       role: role === 'parent' ? 'parent' : 'student',
       isApproved: role === 'parent' ? true : false,
+      isVerified: skipVerification ? true : false,
       otp, otpExpires,
     });
 
     // Send OTP email (don't block registration if email fails)
-    try {
-      await sendOTPEmail(normalizedEmail, otp, firstName.trim());
-    } catch (emailErr) {
-      console.error('OTP email failed:', emailErr.message);
+    if (!skipVerification) {
+      try {
+        await sendOTPEmail(normalizedEmail, otp, firstName.trim());
+      } catch (emailErr) {
+        console.error('OTP email failed:', emailErr.message);
+      }
     }
 
     const token = generateToken(user._id, user.role);
     setTokenCookie(res, token);
 
     res.status(201).json({
-      message: 'تم إنشاء الحساب. تحقق من بريدك للحصول على رمز التحقق.',
+      message: skipVerification
+        ? 'تم إنشاء الحساب بنجاح.'
+        : 'تم إنشاء الحساب. تحقق من بريدك للحصول على رمز التحقق.',
       user: user.toJSON(),
       token,
     });
