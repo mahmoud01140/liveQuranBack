@@ -1,5 +1,4 @@
 import jwt from 'jsonwebtoken';
-import crypto from 'crypto';
 
 const getSecret = () => {
   const secret = process.env.JWT_SECRET;
@@ -30,8 +29,4 @@ export const clearTokenCookie = (res) => {
     httpOnly: true,
     expires: new Date(0),
   });
-};
-
-export const generateOTP = () => {
-  return crypto.randomInt(100000, 1000000).toString();
 };

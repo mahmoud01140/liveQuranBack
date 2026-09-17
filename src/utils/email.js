@@ -12,44 +12,6 @@ const createTransporter = () => {
   });
 };
 
-export const sendOTPEmail = async (email, otp, firstName) => {
-  // In development, log to console instead of sending
-  if (process.env.NODE_ENV === 'development' && !process.env.EMAIL_USER) {
-    console.log(`\n📧 OTP for ${email}: ${otp}\n`);
-    return;
-  }
-
-  const transporter = createTransporter();
-
-  const html = `
-    <!DOCTYPE html>
-    <html dir="rtl" lang="ar">
-    <head><meta charset="UTF-8"></head>
-    <body style="font-family: Arial, sans-serif; background: #f4f4f4; padding: 20px;">
-      <div style="max-width:500px;margin:0 auto;background:white;border-radius:12px;padding:30px;text-align:center;">
-        <div style="background:linear-gradient(135deg,#1D9E75,#15705a);border-radius:8px;padding:20px;margin-bottom:24px;">
-          <h1 style="color:white;margin:0;font-size:24px;">🕌 منصة تحفيظ القرآن</h1>
-        </div>
-        <h2 style="color:#333;">مرحباً ${firstName}!</h2>
-        <p style="color:#666;line-height:1.6;">للتحقق من بريدك الإلكتروني، استخدم الرمز التالي:</p>
-        <div style="background:#E1F5EE;border:2px dashed #1D9E75;border-radius:8px;padding:20px;margin:20px 0;">
-          <span style="font-size:36px;font-weight:bold;color:#1D9E75;letter-spacing:8px;">${otp}</span>
-        </div>
-        <p style="color:#999;font-size:14px;">هذا الرمز صالح لمدة 10 دقائق فقط.</p>
-        <p style="color:#999;font-size:12px;margin-top:20px;">إذا لم تطلب هذا، تجاهل هذا البريد.</p>
-      </div>
-    </body>
-    </html>
-  `;
-
-  await transporter.sendMail({
-    from: process.env.EMAIL_FROM || 'منصة تحفيظ القرآن',
-    to: email,
-    subject: 'رمز التحقق - منصة تحفيظ القرآن',
-    html,
-  });
-};
-
 export const sendPasswordResetEmail = async (email, resetUrl, firstName) => {
   if (process.env.NODE_ENV === 'development' && !process.env.EMAIL_USER) {
     console.log(`\n🔗 Password reset URL for ${email}: ${resetUrl}\n`);

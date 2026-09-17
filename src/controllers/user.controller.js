@@ -11,7 +11,7 @@ export const getAllUsers = async (req, res) => {
     const filter = {};
     if (role) filter.role = role;
     if (level) filter.assignedLevel = level;
-    if (status === 'pending') { filter.isVerified = true; filter.isApproved = false; }
+    if (status === 'pending') { filter.isApproved = false; }
     if (status === 'active') { filter.isApproved = true; filter.isActive = true; }
     if (country) filter.country = country;
     if (search && search.trim()) {
@@ -42,7 +42,7 @@ export const getAllUsers = async (req, res) => {
 export const getPendingApproval = async (req, res) => {
   try {
     const { page, limit } = req.query;
-    const filter = { isVerified: true, isApproved: false, role: 'student', isActive: { $ne: false } };
+    const filter = { isApproved: false, role: 'student', isActive: { $ne: false } };
     const total = await User.countDocuments(filter);
 
     let query = User.find(filter)

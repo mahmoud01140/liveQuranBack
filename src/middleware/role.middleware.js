@@ -24,12 +24,3 @@ export const requireApproved = (req, res, next) => {
   }
   next();
 };
-
-export const requireVerified = (req, res, next) => {
-  if (!req.user.isVerified) {
-    return res.status(403).json({
-      message: 'يرجى تأكيد بريدك الإلكتروني أولاً',
-    });
-  }
-  next();
-};

@@ -31,7 +31,7 @@ const userSchema = new mongoose.Schema({
   registrationType: { type: String, enum: ['student', 'teacher', 'senior'] },
   children:         [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
 
-  isVerified: { type: Boolean, default: false },
+  isVerified: { type: Boolean, default: true },
   isActive:   { type: Boolean, default: true },
   isApproved: { type: Boolean, default: false },
 

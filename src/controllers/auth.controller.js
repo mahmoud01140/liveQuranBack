@@ -1,7 +1,7 @@
 import User from '../models/User.js';
 import ExamResult from '../models/ExamResult.js';
-import { generateToken, setTokenCookie, clearTokenCookie, generateOTP } from '../utils/jwt.js';
-import { sendOTPEmail, sendPasswordResetEmail } from '../utils/email.js';
+import { generateToken, setTokenCookie, clearTokenCookie } from '../utils/jwt.js';
+import { sendPasswordResetEmail } from '../utils/email.js';
 import crypto from 'crypto';
 
 // POST /api/auth/register
@@ -28,40 +28,21 @@ export const register = async (req, res) => {
       return res.status(400).json({ message: 'البريد الإلكتروني مسجل مسبقاً' });
     }
 
-    // TEMPORARY testing bypass (reversible): set SKIP_EMAIL_VERIFICATION=true
-    // to auto-verify accounts and skip OTP/email entirely. Unset the var to
-    // restore the full verification flow — no code revert needed.
-    const skipVerification = process.env.SKIP_EMAIL_VERIFICATION === 'true';
-
-    const otp = skipVerification ? undefined : generateOTP();
-    const otpExpires = skipVerification ? undefined : new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
-
     const user = await User.create({
       firstName: firstName.trim(), lastName: lastName.trim(),
       email: normalizedEmail, password,
       phone: phone?.trim(), country, dateOfBirth, gender,
       role: role === 'parent' ? 'parent' : 'student',
       isApproved: role === 'parent' ? true : false,
-      isVerified: skipVerification ? true : false,
-      otp, otpExpires,
+      // Email verification removed permanently: accounts are active immediately.
+      isVerified: true,
     });
-
-    // Send OTP email (don't block registration if email fails)
-    if (!skipVerification) {
-      try {
-        await sendOTPEmail(normalizedEmail, otp, firstName.trim());
-      } catch (emailErr) {
-        console.error('OTP email failed:', emailErr.message);
-      }
-    }
 
     const token = generateToken(user._id, user.role);
     setTokenCookie(res, token);
 
     res.status(201).json({
-      message: skipVerification
-        ? 'تم إنشاء الحساب بنجاح.'
-        : 'تم إنشاء الحساب. تحقق من بريدك للحصول على رمز التحقق.',
+      message: 'تم إنشاء الحساب بنجاح.',
       user: user.toJSON(),
       token,
     });
@@ -72,62 +53,6 @@ export const register = async (req, res) => {
       return res.status(400).json({ message: 'البريد الإلكتروني مسجل مسبقاً' });
     }
     res.status(500).json({ message: 'خطأ في التسجيل' });
-  }
-};
-
-// POST /api/auth/verify-email
-export const verifyEmail = async (req, res) => {
-  try {
-    const { otp } = req.body;
-    const user = await User.findById(req.user._id);
-
-    if (!user.otp || user.otp !== otp) {
-      return res.status(400).json({ message: 'الرمز غير صحيح' });
-    }
-    if (user.otpExpires < new Date()) {
-      return res.status(400).json({ message: 'انتهت صلاحية الرمز. طلب رمزاً جديداً.' });
-    }
-
-    user.isVerified = true;
-    user.otp = undefined;
-    user.otpExpires = undefined;
-    await user.save();
-
-    res.json({ message: 'تم التحقق من البريد الإلكتروني بنجاح', user: user.toJSON() });
-  } catch (error) {
-    res.status(500).json({ message: 'خطأ في التحقق' });
-  }
-};
-
-// POST /api/auth/resend-otp
-export const resendOTP = async (req, res) => {
-  try {
-    const user = await User.findById(req.user._id);
-
-    // Don't resend if already verified
-    if (user.isVerified) {
-      return res.status(400).json({ message: 'البريد الإلكتروني محقق بالفعل' });
-    }
-
-    // Rate limit: don't allow resend within 60 seconds
-    if (user.otpExpires) {
-      const otpCreatedAt = new Date(user.otpExpires.getTime() - 10 * 60 * 1000); // OTP lasts 10min
-      const secondsSinceCreation = (Date.now() - otpCreatedAt.getTime()) / 1000;
-      if (secondsSinceCreation < 60) {
-        const waitSeconds = Math.ceil(60 - secondsSinceCreation);
-        return res.status(429).json({ message: `انتظر ${waitSeconds} ثانية قبل طلب رمز جديد` });
-      }
-    }
-
-    const otp = generateOTP();
-    user.otp = otp;
-    user.otpExpires = new Date(Date.now() + 10 * 60 * 1000);
-    await user.save();
-
-    await sendOTPEmail(user.email, otp, user.firstName);
-    res.json({ message: 'تم إرسال رمز جديد إلى بريدك الإلكتروني' });
-  } catch (error) {
-    res.status(500).json({ message: 'خطأ في إرسال الرمز' });
   }
 };
 

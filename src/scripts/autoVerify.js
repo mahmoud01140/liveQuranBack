@@ -19,9 +19,8 @@ if (!MONGODB_URI) {
   process.exit(1);
 }
 
-// ONE-TIME backfill for the temporary email-verification bypass:
-// marks every unverified student verified so testers are not stuck at
-// /verify-email with no OTP. Safe to re-run (only touches isVerified:false).
+// ONE-TIME backfill: marks every unverified student verified (leftover from
+// when email verification existed). Safe to re-run (only touches isVerified:false).
 // Usage: node src/scripts/autoVerify.js
 async function autoVerifyStudents() {
   try {
