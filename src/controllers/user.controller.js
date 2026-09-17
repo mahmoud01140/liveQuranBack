@@ -42,7 +42,7 @@ export const getAllUsers = async (req, res) => {
 export const getPendingApproval = async (req, res) => {
   try {
     const { page, limit } = req.query;
-    const filter = { isVerified: true, isApproved: false, role: 'student' };
+    const filter = { isVerified: true, isApproved: false, role: 'student', isActive: { $ne: false } };
     const total = await User.countDocuments(filter);
 
     let query = User.find(filter)
@@ -142,6 +142,10 @@ export const updateUser = async (req, res) => {
 export const approveUser = async (req, res) => {
   try {
     const { assignedLevel } = req.body;
+    const LEVEL_ENUM = ['foundation', 'memorization', 'teacher_prep', 'senior'];
+    if (!assignedLevel || !LEVEL_ENUM.includes(assignedLevel)) {
+      return res.status(400).json({ message: 'حدد مستوى صحيحاً قبل القبول (التأسيس / التحفيظ / إعداد معلم / كبار السن)' });
+    }
     const user = await User.findByIdAndUpdate(
       req.params.id,
       { isApproved: true, assignedLevel },

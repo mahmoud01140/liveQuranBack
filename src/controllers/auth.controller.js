@@ -180,7 +180,8 @@ export const getMe = async (req, res) => {
 export const forgotPassword = async (req, res) => {
   try {
     const { email } = req.body;
-    const user = await User.findOne({ email });
+    const normalizedEmail = email?.trim().toLowerCase();
+    const user = await User.findOne({ email: normalizedEmail });
 
     // Always return success to prevent email enumeration
     if (!user) {

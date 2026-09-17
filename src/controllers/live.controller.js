@@ -251,7 +251,7 @@ export const getGroupSessions = async (req, res) => {
 // POST /api/live
 export const createSession = async (req, res) => {
   try {
-    const { groupId, title, scheduledAt, sessionType, notes, homework, quranHomework, lessonCovered, lessonTitle } = req.body;
+    const { groupId, title, scheduledAt, sessionType, notes, homework, homeworkDeadline, quranHomework, lessonCovered, lessonTitle } = req.body;
 
     if (!groupId || !title?.trim()) {
       return res.status(400).json({ message: 'معرّف المجموعة وعنوان الجلسة مطلوبان' });
@@ -287,6 +287,7 @@ export const createSession = async (req, res) => {
       lessonTitle: lessonTitle || title,
       notes,
       homework: finalHomework,
+      homeworkDeadline: homeworkDeadline || undefined,
       quranHomework: finalQuranHomework,
     });
 

@@ -8,10 +8,11 @@ import { evaluateUserSubscription } from './payment.controller.js';
 // GET /api/groups
 export const getAllGroups = async (req, res) => {
   try {
-    const { level, active } = req.query;
+    const { level, active, teacher } = req.query;
     const filter = {};
     if (level) filter.level = level;
     if (active !== undefined) filter.isActive = active === 'true';
+    if (teacher) filter.teacher = teacher;
 
     const groups = await Group.find(filter)
       .populate('teacher', 'firstName lastName avatar')

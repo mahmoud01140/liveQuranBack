@@ -81,6 +81,10 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const server = http.createServer(app);
 
+// Behind Vercel/Render/Nginx the app sees internal http — trust the proxy so
+// req.protocol/host (used for upload URLs) reflect the real public URL.
+app.set('trust proxy', 1);
+
 // CORS must be at the very top
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
