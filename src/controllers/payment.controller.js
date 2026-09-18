@@ -72,20 +72,23 @@ export const evaluateUserSubscription = async (user) => {
     await user.save();
   }
 
+  const hasGroup = Boolean(user.group);
   const trialAttended = sub.trialSessionsAttended || 0;
   const hasTrialRemaining = trialAttended < trialAllowed;
   const isPaidActive = sub.status === 'active' && !isExpired;
-  const canAccessLiveSession = isPaidActive || hasTrialRemaining;
+  const canAccessLiveSession = hasGroup && (isPaidActive || hasTrialRemaining);
 
   return {
     ...sub.toObject ? sub.toObject() : sub,
     daysRemaining,
-    isExpired,
-    isExpiringSoon,
+    isExpired: hasGroup ? isExpired : false,
+    isExpiringSoon: hasGroup ? isExpiringSoon : false,
     canAccessLiveSession,
-    isTrial: !isPaidActive && hasTrialRemaining,
+    isTrial: hasGroup ? (!isPaidActive && hasTrialRemaining) : false,
     trialSessionsAttended: trialAttended,
     trialSessionsAllowed: trialAllowed,
+    hasGroup,
+    canSubscribe: hasGroup,
   };
 };
 
@@ -157,6 +160,15 @@ export const submitPaymentRequest = async (req, res) => {
 
     if (!req.file) {
       return res.status(400).json({ message: 'يرجى إرفاق صورة إيصال التحويل أو لقطة الشاشة للعملية' });
+    }
+
+    // Check if student has been placed in a group
+    const studentUser = await User.findById(req.user._id);
+    if (!studentUser || !studentUser.group) {
+      return res.status(400).json({
+        message: 'لا يمكن تقديم طلب سداد الاشتراك إلا بعد تسكينك في إحدى المجموعات واعتماد جدولك مع معلمك.',
+        code: 'NO_GROUP_ASSIGNED',
+      });
     }
 
     // Check if user already has a pending payment request
