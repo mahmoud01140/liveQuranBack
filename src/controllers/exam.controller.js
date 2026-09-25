@@ -493,7 +493,10 @@ export const submitOralExam = async (req, res) => {
     if (resultId) {
       result = await ExamResult.findByIdAndUpdate(
         resultId,
-        { $push: { oralRecordings: { $each: oralRecordings } } },
+        {
+          $push: { oralRecordings: { $each: oralRecordings } },
+          $set: { status: 'pending_oral_review' },
+        },
         { new: true }
       );
     } else {
