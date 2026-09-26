@@ -21,7 +21,7 @@ const examResultSchema = new mongoose.Schema({
 
   // Oral recordings
   oralRecordings: [{
-    taskId:       { type: mongoose.Schema.Types.ObjectId },
+    taskId:       { type: mongoose.Schema.Types.Mixed },
     audioUrl:     { type: String },
     teacherScore: { type: Number },
     teacherNotes: { type: String },

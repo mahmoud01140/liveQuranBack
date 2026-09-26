@@ -150,10 +150,9 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(cookieParser());
 
-// Static files (uploads) — protected: require auth, serve via sendFile
-app.use('/uploads', protect, express.static(uploadDir, {
-  // prevent direct indexing / caching of user content
-  setHeaders: (res) => res.setHeader('Cache-Control', 'private, max-age=3600'),
+// Static files (uploads) — allow streaming of audio recordings and media
+app.use('/uploads', express.static(uploadDir, {
+  setHeaders: (res) => res.setHeader('Cache-Control', 'public, max-age=3600'),
 }));
 
 // API Routes

@@ -30,11 +30,13 @@ export const getPlacementExam = async (req, res) => {
     // Check if user already completed this placement exam
     const existingResult = await ExamResult.findOne({ exam: exam._id, student: req.user._id });
     if (existingResult) {
+      const oralCompleted = Boolean(existingResult.oralRecordings?.length > 0 || existingResult.status === 'reviewed');
       return res.json({
         exam: sanitizeExamForStudent(exam),
-        alreadyCompleted: true,
+        alreadyCompleted: oralCompleted,
+        writtenCompleted: true,
         result: existingResult,
-        message: 'لقد أجريت امتحان التحديد مسبقاً',
+        message: oralCompleted ? 'لقد أجريت امتحان التحديد مسبقاً' : 'تم تسليم الامتحان التحريري وبانتظار التسميع الشفهي',
       });
     }
 
@@ -485,34 +487,41 @@ export const submitOralExam = async (req, res) => {
     const files = req.files || [];
 
     const oralRecordings = files.map((file, idx) => ({
-      taskId: req.body[`taskId_${idx}`],
+      taskId: req.body[`taskId_${idx}`] || null,
       audioUrl: getFileUrl(req, file.path),
     }));
 
-    let result;
+    let result = null;
     if (resultId) {
-      result = await ExamResult.findByIdAndUpdate(
-        resultId,
-        {
-          $push: { oralRecordings: { $each: oralRecordings } },
-          $set: { status: 'pending_oral_review' },
-        },
-        { new: true }
-      );
+      result = await ExamResult.findById(resultId);
+    }
+    if (!result) {
+      result = await ExamResult.findOne({
+        exam: req.params.id,
+        student: req.user._id,
+      });
+    }
+
+    if (result) {
+      result.oralRecordings = oralRecordings;
+      result.status = 'pending_oral_review';
+      result.submittedAt = new Date();
+      await result.save();
     } else {
       result = await ExamResult.create({
         exam: req.params.id,
         student: req.user._id,
-        examType: 'oral',
+        examType: 'placement',
         oralRecordings,
         status: 'pending_oral_review',
         submittedAt: new Date(),
       });
     }
 
-    // Update user recordings
+    // Update user recordings & set placementExamTaken
     await User.findByIdAndUpdate(req.user._id, {
       oralExamRecordings: oralRecordings.map(r => r.audioUrl),
+      placementExamTaken: true,
     });
 
     // Placement oral if it extends a placement result, else a standalone oral
@@ -529,8 +538,9 @@ export const submitOralExam = async (req, res) => {
       isPlacement,
     }).catch(() => {});
 
-    res.json({ message: 'تم رفع التسجيلات الشفهية بنجاح', result });
+    res.json({ message: 'تم رفع التسجيلات الشفهية بنجاح إلى الإدارة للمراجعة', result });
   } catch (error) {
+    console.error('Error in submitOralExam:', error);
     res.status(500).json({ message: 'خطأ في رفع التسجيلات' });
   }
 };
@@ -642,22 +652,23 @@ export const getExamResults = async (req, res) => {
   }
 };
 
-// PUT /api/exams/results/:resultId/review  (teacher reviews oral)
+// PUT /api/exams/results/:resultId/review  (teacher / admin reviews oral)
 export const reviewOralResult = async (req, res) => {
   try {
-    const { teacherNotes, oralScore, teacherAudioUrl, flaggedVerses, assignedLevel } = req.body;
+    const { teacherNotes, oralScore, teacherAudioUrl, flaggedVerses, assignedLevel, isApproved } = req.body;
 
     // Fetch existing result first to get writtenScore
     const existing = await ExamResult.findById(req.params.resultId).populate('exam', 'passingScore totalPoints type');
     if (!existing) return res.status(404).json({ message: 'النتيجة غير موجودة' });
 
-    const totalScore = (existing.writtenScore || 0) + (parseInt(oralScore) || 0);
+    const numOralScore = parseInt(oralScore) || 0;
+    const totalScore = (existing.writtenScore || 0) + numOralScore;
     const totalPercentage = existing.writtenPercentage
-      ? Math.round((existing.writtenPercentage + (parseInt(oralScore) || 0)) / 2)
-      : parseInt(oralScore) || 0;
+      ? Math.round((existing.writtenPercentage + numOralScore) / 2)
+      : numOralScore;
 
     const updateData = {
-      oralScore: parseInt(oralScore) || 0,
+      oralScore: numOralScore,
       teacherNotes,
       teacherAudioUrl,
       flaggedVerses: Array.isArray(flaggedVerses) ? flaggedVerses : [],
@@ -673,21 +684,30 @@ export const reviewOralResult = async (req, res) => {
       req.params.resultId,
       updateData,
       { new: true }
-    ).populate('student', 'firstName lastName pushSubscription _id assignedLevel');
+    ).populate('student', 'firstName lastName pushSubscription _id assignedLevel isApproved');
 
-    // Placement level override: the oral review can confirm or correct the
-    // auto-assigned level from the written exam.
+    // Placement level override & approval
     const LEVEL_ENUM = ['foundation', 'memorization', 'teacher_prep', 'senior'];
     let levelChanged = false;
+    const userUpdates = {};
+
     if (
       assignedLevel &&
       LEVEL_ENUM.includes(assignedLevel) &&
-      (result.examType === 'placement' || existing.exam?.type === 'placement') &&
-      result.student?.assignedLevel !== assignedLevel
+      (result.examType === 'placement' || existing.exam?.type === 'placement')
     ) {
-      await User.findByIdAndUpdate(result.student._id, { assignedLevel });
+      userUpdates.assignedLevel = assignedLevel;
       result.student.assignedLevel = assignedLevel;
       levelChanged = true;
+    }
+
+    if (isApproved === true) {
+      userUpdates.isApproved = true;
+      result.student.isApproved = true;
+    }
+
+    if (Object.keys(userUpdates).length > 0) {
+      await User.findByIdAndUpdate(result.student._id, userUpdates);
     }
 
     // Create WeakPoint items for flagged verses if provided
@@ -714,10 +734,10 @@ export const reviewOralResult = async (req, res) => {
     const notification = await Notification.create({
       recipient: result.student._id,
       type: 'result_ready',
-      title: '📋 نتيجة تقييمك جاهزة',
+      title: '📋 نتيجة تقييمك الشفهي جاهزة',
       body: levelChanged
-        ? 'راجع المعلم تقييمك الشفهي وحدّث مستواك النهائي. اطلع على الملاحظات والنتيجة الآن.'
-        : 'راجع المعلم تقييمك الشفهي. اطلع على الملاحظات والنتيجة الآن.',
+        ? 'قام المشرف بمراجعة تلاوتك الشفهية وحدّث مستواك النهائي. اطلع على التوجيهات والنتيجة الآن.'
+        : 'تمت مراجعة تقييمك الشفهي من قِبل المشرف. اطلع على الملاحظات والنتيجة الآن.',
       data: { resultId: result._id },
     });
     if (io) io.emitToUser(result.student._id.toString(), 'result-ready', { resultId: result._id });
@@ -725,8 +745,9 @@ export const reviewOralResult = async (req, res) => {
       await sendWebPush(result.student.pushSubscription, notification.title, notification.body);
     }
 
-    res.json({ message: 'تم حفظ المراجعة وإرسال إشعار للطالب', result });
+    res.json({ message: 'تم حفظ المراجعة وتحديث النتيجة وإرسال الإشعار للطالب', result });
   } catch (error) {
+    console.error('Error in reviewOralResult:', error);
     res.status(500).json({ message: 'خطأ في المراجعة' });
   }
 };
@@ -774,13 +795,16 @@ export const updateWeakPointStatus = async (req, res) => {
   }
 };
 
-// GET /api/exams/results/pending-review  (teacher sees pending oral reviews)
+// GET /api/exams/results/pending-review  (teacher / admin sees pending oral reviews)
 export const getPendingReviews = async (req, res) => {
   try {
     const filter = {
       status: { $in: ['pending_oral_review', 'submitted'] },
       'oralRecordings.0': { $exists: true },
-      reviewedAt: { $exists: false },
+      $or: [
+        { reviewedAt: { $exists: false } },
+        { reviewedAt: null },
+      ],
     };
     // Teachers only see their own groups' students; admins see everything.
     if (req.user.role === 'teacher') {
@@ -790,12 +814,12 @@ export const getPendingReviews = async (req, res) => {
       filter.student = { $in: myStudentIds.map(s => s._id) };
     }
     const results = await ExamResult.find(filter)
-      .populate('student', 'firstName lastName avatar group assignedLevel')
-      .populate('exam', 'title type registrationType lessonTitle')
+      .populate('student', 'firstName lastName avatar group assignedLevel isApproved email phone registrationType')
+      .populate('exam', 'title type registrationType lessonTitle oralTasks')
       .sort({ submittedAt: 1 });
     res.json({ results });
   } catch (error) {
-    res.status(500).json({ message: 'خطأ' });
+    res.status(500).json({ message: 'خطأ في جلب الاختبارات الشفهية' });
   }
 };
 
