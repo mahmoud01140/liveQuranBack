@@ -815,7 +815,7 @@ export const getPendingReviews = async (req, res) => {
     }
     const results = await ExamResult.find(filter)
       .populate('student', 'firstName lastName avatar group assignedLevel isApproved email phone registrationType')
-      .populate('exam', 'title type registrationType lessonTitle oralTasks')
+      .populate('exam', 'title type registrationType lessonTitle oralTasks questions')
       .sort({ submittedAt: 1 });
     res.json({ results });
   } catch (error) {
