@@ -169,6 +169,15 @@ export const updateUser = async (req, res) => {
       return res.status(403).json({ message: 'غير مصرح لك بتعديل بيانات هذا المستخدم' });
     }
 
+    // An admin must never demote their own account (would lock everyone out)
+    if (
+      req.user.role === 'admin' &&
+      req.user._id.toString() === req.params.id &&
+      req.body.role && req.body.role !== 'admin'
+    ) {
+      return res.status(400).json({ message: 'لا يمكنك تخفيض صلاحيات حسابك الخاص' });
+    }
+
     const allowedFields = ['firstName', 'lastName', 'phone', 'country', 'avatar', 'notificationPreferences', 'dateOfBirth', 'gender', 'registrationType'];
     const updates = {};
     allowedFields.forEach(f => { if (req.body[f] !== undefined) updates[f] = req.body[f]; });
@@ -221,12 +230,20 @@ export const approveUser = async (req, res) => {
   }
 };
 
-// DELETE /api/users/:id — admin only
+// DELETE /api/users/:id — admin only (permanent)
 export const deleteUser = async (req, res) => {
   try {
+    // An admin must never delete their own account
+    if (req.user._id.toString() === req.params.id) {
+      return res.status(400).json({ message: 'لا يمكنك حذف حسابك الخاص' });
+    }
     const user = await User.findByIdAndDelete(req.params.id);
     if (!user) return res.status(404).json({ message: 'المستخدم غير موجود' });
-    res.json({ message: 'تم حذف المستخدم' });
+    // Free the group seat so member counts stay correct
+    if (user.group) {
+      await Group.findByIdAndUpdate(user.group, { $pull: { students: user._id } });
+    }
+    res.json({ message: 'تم حذف المستخدم نهائياً' });
   } catch (error) {
     res.status(500).json({ message: 'خطأ في الحذف' });
   }
