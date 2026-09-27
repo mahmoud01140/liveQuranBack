@@ -324,9 +324,10 @@ export const submitExam = async (req, res) => {
     const existing = await ExamResult.findOne({ exam: exam._id, student: req.user._id });
     if (existing) return res.status(400).json({ message: 'لقد أجريت هذا الامتحان من قبل' });
 
-    // Calculate written score — supports MCQ and written types
+    // Calculate written score — supports MCQ and true_false auto-graded questions
     const writtenAnswers = [];
     let writtenScore = 0;
+    let autoGradedTotal = 0;
 
     exam.questions.forEach((q, idx) => {
       let isCorrect = false;
@@ -338,20 +339,22 @@ export const submitExam = async (req, res) => {
         selectedAnswer = answers?.[idx];
         isCorrect = selectedAnswer === q.correctAnswer;
         points = isCorrect ? (q.points || 1) : 0;
+        autoGradedTotal += (q.points || 1);
       } else if (q.type === 'true_false') {
         // answers[idx] is boolean (true/false)
         const studentBool = answers?.[idx];
         isCorrect = studentBool === q.correctAnswerBool;
         points = isCorrect ? (q.points || 1) : 0;
         selectedAnswer = studentBool;
+        autoGradedTotal += (q.points || 1);
       } else if (q.type === 'written') {
         writtenAnswer = (rawWrittenAnswers?.[idx] || '').trim();
         const correct = (q.correctAnswerText || '').trim();
-        // Case-insensitive comparison with some normalization
         isCorrect = writtenAnswer.toLowerCase() === correct.toLowerCase();
         points = isCorrect ? (q.points || 1) : 0;
+        autoGradedTotal += (q.points || 1);
       } else if (q.type === 'recitation') {
-        // Recitation is always pending — will be scored via audio review
+        // Recitation is oral question — reviewed and graded by teacher/admin
         isCorrect = false;
         points = 0;
       }
@@ -369,9 +372,9 @@ export const submitExam = async (req, res) => {
     // Check if any recitation questions exist → status pending_oral_review
     const hasRecitation = exam.questions.some(q => q.type === 'recitation');
 
-    const writtenPercentage = exam.totalPoints > 0
-      ? Math.round((writtenScore / exam.totalPoints) * 100)
-      : 0;
+    const writtenPercentage = autoGradedTotal > 0
+      ? Math.round((writtenScore / autoGradedTotal) * 100)
+      : (exam.totalPoints > 0 ? Math.round((writtenScore / exam.totalPoints) * 100) : 0);
 
     // Determine assigned level based on score and registration type
     let assignedLevel = 'foundation';

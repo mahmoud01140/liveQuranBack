@@ -1,6 +1,7 @@
 import User from '../models/User.js';
 import Group from '../models/Group.js';
 import Notification from '../models/Notification.js';
+import ExamResult from '../models/ExamResult.js';
 import { sendGroupAssignmentEmail } from '../utils/email.js';
 import { sendWebPush } from '../utils/webpush.js';
 
@@ -81,7 +82,7 @@ export const getUnassignedStudents = async (req, res) => {
     const total = await User.countDocuments(filter);
 
     let query = User.find(filter)
-      .select('firstName lastName email assignedLevel country avatar createdAt isApproved isVerified registrationType')
+      .select('firstName lastName email assignedLevel country avatar createdAt isApproved isVerified registrationType placementExamTaken placementExamScore oralExamRecordings')
       .sort({ createdAt: -1 });
 
     if (page && limit) {
@@ -89,8 +90,55 @@ export const getUnassignedStudents = async (req, res) => {
     }
 
     const students = await query;
+    const studentIds = students.map(s => s._id);
+
+    // Fetch placement exam results for these unassigned students
+    const examResults = await ExamResult.find({
+      student: { $in: studentIds },
+    }).populate('exam', 'title type questions passingScore totalPoints').sort({ createdAt: -1 });
+
+    const resultsMap = {};
+    examResults.forEach(r => {
+      const isPlacement = r.examType === 'placement' || r.examType === 'oral' || r.exam?.type === 'placement';
+      if (!isPlacement) return;
+      const sid = r.student.toString();
+      // Keep result, prioritizing ones with oral recordings
+      if (!resultsMap[sid] || (!resultsMap[sid].oralRecordings?.length && r.oralRecordings?.length)) {
+        resultsMap[sid] = r;
+      }
+    });
+
+    const enrichedStudents = students.map(st => {
+      const studentObj = st.toObject ? st.toObject() : JSON.parse(JSON.stringify(st));
+      const r = resultsMap[st._id.toString()];
+
+      let audioRecordings = [];
+      if (r?.oralRecordings?.length) {
+        audioRecordings = r.oralRecordings.map(rec => rec.audioUrl).filter(Boolean);
+      }
+      if (!audioRecordings.length && st.oralExamRecordings?.length) {
+        audioRecordings = st.oralExamRecordings.filter(Boolean);
+      }
+
+      const hasTakenExam = Boolean(st.placementExamTaken || r);
+      const hasOral = audioRecordings.length > 0;
+
+      studentObj.placementExamInfo = {
+        hasTakenExam,
+        writtenScore: r?.writtenScore ?? null,
+        writtenPercentage: r?.writtenPercentage ?? st.placementExamScore ?? null,
+        hasOral,
+        audioRecordings,
+        status: r?.status || (hasTakenExam ? (hasOral ? 'pending_oral_review' : 'submitted') : 'not_taken'),
+        submittedAt: r?.submittedAt || null,
+        examTitle: r?.exam?.title || 'امتحان تحديد المستوى',
+      };
+
+      return studentObj;
+    });
+
     res.json({
-      students,
+      students: enrichedStudents,
       total,
       page: page ? parseInt(page) : 1,
       pages: limit ? Math.ceil(total / parseInt(limit)) : 1,

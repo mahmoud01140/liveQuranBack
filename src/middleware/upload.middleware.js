@@ -43,7 +43,8 @@ const storage = multer.diskStorage({
 
 const fileFilter = (req, file, cb) => {
   const allowedTypes = [
-    'audio/webm', 'audio/ogg', 'audio/wav', 'audio/mp3', 'audio/mpeg', 'audio/mp4',
+    'audio/webm', 'audio/ogg', 'audio/wav', 'audio/x-wav', 'audio/mp3', 'audio/mpeg', 'audio/mp4',
+    'audio/m4a', 'audio/x-m4a', 'audio/aac', 'audio/flac', 'audio/opus', 'audio/3gpp', 'audio/3gpp2', 'audio/amr',
     'video/webm', 'video/mp4',
     'image/jpeg', 'image/png', 'image/webp',
     'application/pdf',
