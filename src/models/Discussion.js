@@ -10,14 +10,20 @@ const messageSchema = new mongoose.Schema({
   readBy: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
 }, { timestamps: true });
 
+// One discussion room per lesson (visible to that lesson's group members).
+// Legacy group-only rooms (no lessonId) are left untouched in the DB but
+// have no serving route anymore.
 const discussionSchema = new mongoose.Schema({
-  group: { type: mongoose.Schema.Types.ObjectId, ref: 'Group', required: true, unique: true },
+  group: { type: mongoose.Schema.Types.ObjectId, ref: 'Group', required: true },
+  lessonId: { type: String, required: true },
+  lessonTitle: { type: String, default: '' },
   messages: [messageSchema],
   isActive: { type: Boolean, default: true },
   lastMessageAt: { type: Date, default: Date.now },
 }, { timestamps: true });
 
-// Index for faster queries ({ group: 1 } exists implicitly via unique: true above)
+// Index for faster queries
+discussionSchema.index({ group: 1, lessonId: 1 }, { unique: true });
 discussionSchema.index({ 'messages.createdAt': -1 });
 discussionSchema.index({ lastMessageAt: -1 });
 

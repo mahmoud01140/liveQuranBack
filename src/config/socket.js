@@ -3,7 +3,6 @@ import Notification from '../models/Notification.js';
 import User from '../models/User.js';
 import Group from '../models/Group.js';
 import LiveSession from '../models/LiveSession.js';
-import Discussion from '../models/Discussion.js';
 import { sendWebPush } from '../utils/webpush.js';
 
 export const initSocket = (io) => {
@@ -275,96 +274,6 @@ export const initSocket = (io) => {
         studentId: socket.userId,
         memorizedVerses: verses,
         currentJuz: juz,
-      });
-    });
-
-    // ─── Discussion Rooms ──────────────────────────────────────────
-    socket.on('join-discussion', ({ groupId }) => {
-      if (!groupId) return;
-      socket.join(`discussion:${groupId}`);
-      const count = io.sockets.adapter.rooms.get(`discussion:${groupId}`)?.size || 0;
-      io.to(`discussion:${groupId}`).emit('discussion-online-count', { groupId, count });
-      console.log(`💬 Socket ${socket.id} joined discussion:${groupId}`);
-    });
-
-    socket.on('leave-discussion', ({ groupId }) => {
-      if (!groupId) return;
-      socket.leave(`discussion:${groupId}`);
-      const count = io.sockets.adapter.rooms.get(`discussion:${groupId}`)?.size || 0;
-      io.to(`discussion:${groupId}`).emit('discussion-online-count', { groupId, count });
-    });
-
-    socket.on('send-discussion-message', async ({ groupId, content, type, replyTo, senderName }) => {
-      if (!requireAuth()) return;
-      if (!content || !groupId) return;
-
-      const sanitizedContent = String(content).substring(0, 2000).trim();
-      if (!sanitizedContent) return;
-
-      try {
-        // Verify group membership
-        const group = await Group.findById(groupId).select('teacher students');
-        if (!group) return socket.emit('error', { message: 'المجموعة غير موجودة' });
-
-        const senderUser = await User.findById(socket.userId).select('firstName lastName role avatar');
-        const isTeacher = group.teacher?.toString() === socket.userId;
-        const isStudent = group.students.some(s => s.toString() === socket.userId);
-        const isAdmin = senderUser?.role === 'admin';
-        if (!isTeacher && !isStudent && !isAdmin) {
-          return socket.emit('error', { message: 'ليس لديك صلاحية الإرسال' });
-        }
-
-        // Find or create discussion
-        let discussion = await Discussion.findOne({ group: groupId });
-        if (!discussion) {
-          discussion = await Discussion.create({ group: groupId, messages: [] });
-        }
-
-        const newMessage = {
-          sender: socket.userId,
-          content: sanitizedContent,
-          type: type || 'text',
-          replyTo: replyTo || null,
-          readBy: [socket.userId],
-        };
-
-        discussion.messages.push(newMessage);
-        discussion.lastMessageAt = new Date();
-        await discussion.save();
-
-        // Get the saved message and populate sender
-        const savedMsg = discussion.messages[discussion.messages.length - 1];
-
-
-        const populatedMsg = {
-          _id: savedMsg._id,
-          sender: senderUser,
-          content: savedMsg.content,
-          type: savedMsg.type,
-          replyTo: savedMsg.replyTo,
-          isPinned: savedMsg.isPinned,
-          isDeleted: savedMsg.isDeleted,
-          readBy: savedMsg.readBy,
-          createdAt: savedMsg.createdAt,
-          updatedAt: savedMsg.updatedAt,
-        };
-
-        io.to(`discussion:${groupId}`).emit('discussion-message', {
-          message: populatedMsg,
-          groupId,
-        });
-      } catch (err) {
-        console.error('Discussion message error:', err.message);
-        socket.emit('error', { message: 'خطأ في إرسال الرسالة' });
-      }
-    });
-
-    socket.on('discussion-typing', ({ groupId, userName, isTyping }) => {
-      if (!requireAuth()) return;
-      socket.to(`discussion:${groupId}`).emit('discussion-typing', {
-        userId: socket.userId,
-        userName: userName || 'مستخدم',
-        isTyping,
       });
     });
 

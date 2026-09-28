@@ -321,6 +321,8 @@ export const getAllPaymentsAdmin = async (req, res) => {
 
     const total = await Payment.countDocuments(query);
 
+    const skip = (Number(page) - 1) * Number(limit);
+
     const payments = await Payment.find(query)
       .populate('user', 'firstName lastName email phone avatar assignedLevel subscription')
       .populate('reviewedBy', 'firstName lastName')

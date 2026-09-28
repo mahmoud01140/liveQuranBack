@@ -1,25 +1,26 @@
 import express from 'express';
 import {
-  getDiscussion,
-  sendMessage,
-  togglePinMessage,
-  deleteMessage,
+  getLessonDiscussion,
+  sendLessonMessage,
+  toggleLessonPinMessage,
+  deleteLessonMessage,
 } from '../controllers/discussion.controller.js';
 import { protect } from '../middleware/auth.middleware.js';
 
 const router = express.Router();
 router.use(protect);
 
-// GET  /api/discussions/:groupId          — Get/create discussion room
-router.get('/:groupId', getDiscussion);
+// One room per lesson — pure HTTP polling, no socket.io.
+// GET  /api/discussions/lesson/:lessonId          — Get/create lesson room
+router.get('/lesson/:lessonId', getLessonDiscussion);
 
-// POST /api/discussions/:groupId/messages — Send a message (REST fallback)
-router.post('/:groupId/messages', sendMessage);
+// POST /api/discussions/lesson/:lessonId/messages — Send a message
+router.post('/lesson/:lessonId/messages', sendLessonMessage);
 
-// PUT  /api/discussions/:groupId/messages/:messageId/pin — Toggle pin
-router.put('/:groupId/messages/:messageId/pin', togglePinMessage);
+// PUT  /api/discussions/lesson/:lessonId/messages/:messageId/pin — Toggle pin
+router.put('/lesson/:lessonId/messages/:messageId/pin', toggleLessonPinMessage);
 
-// DELETE /api/discussions/:groupId/messages/:messageId — Delete message
-router.delete('/:groupId/messages/:messageId', deleteMessage);
+// DELETE /api/discussions/lesson/:lessonId/messages/:messageId — Delete message
+router.delete('/lesson/:lessonId/messages/:messageId', deleteLessonMessage);
 
 export default router;
