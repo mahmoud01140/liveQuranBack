@@ -251,7 +251,7 @@ export const getGroupSessions = async (req, res) => {
 // POST /api/live
 export const createSession = async (req, res) => {
   try {
-    const { groupId, title, scheduledAt, sessionType, notes, homework, homeworkDeadline, quranHomework, lessonCovered, lessonTitle, allowStudentVideo } = req.body;
+    const { groupId, title, scheduledAt, sessionType, notes, homework, homeworkDeadline, quranHomework, lessonCovered, lessonTitle } = req.body;
 
     if (!groupId || !title?.trim()) {
       return res.status(400).json({ message: 'معرّف المجموعة وعنوان الجلسة مطلوبان' });
@@ -289,7 +289,6 @@ export const createSession = async (req, res) => {
       homework: finalHomework,
       homeworkDeadline: homeworkDeadline || undefined,
       quranHomework: finalQuranHomework,
-      allowStudentVideo: allowStudentVideo === true,
     });
 
     // Notify group students
@@ -460,32 +459,6 @@ export const startSession = async (req, res) => {
     res.json({ message: 'تم بدء البث', session: sessionObj });
   } catch (error) {
     res.status(500).json({ message: 'خطأ في بدء البث' });
-  }
-};
-
-// PUT /api/live/:id/settings — flip runtime settings mid-broadcast
-// (currently: allowStudentVideo). Teacher must own the session's group; admin always allowed.
-export const updateSessionSettings = async (req, res) => {
-  try {
-    const session = await LiveSession.findById(req.params.id).populate('group', 'students name teacher');
-    if (!session) return res.status(404).json({ message: 'الجلسة غير موجودة' });
-
-    if (req.user.role === 'teacher') {
-      const isTeacher = session.teacher?.toString() === req.user._id.toString() ||
-                        session.group?.teacher?.toString() === req.user._id.toString();
-      if (!isTeacher) {
-        return res.status(403).json({ message: 'غير مصرح لك بتعديل إعدادات هذه الجلسة' });
-      }
-    }
-
-    if (typeof req.body.allowStudentVideo === 'boolean') {
-      session.allowStudentVideo = req.body.allowStudentVideo;
-    }
-    await session.save();
-
-    res.json({ message: 'تم تحديث إعدادات الجلسة', session });
-  } catch (error) {
-    res.status(500).json({ message: 'خطأ في تحديث إعدادات الجلسة' });
   }
 };
 
