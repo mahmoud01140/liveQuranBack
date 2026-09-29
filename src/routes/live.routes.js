@@ -2,7 +2,7 @@ import express from 'express';
 import {
   getGroupSessions, createSession, getSessionById, getActiveSession,
   startSession, endSession, joinSession, sendChatMessage, getAttendees,
-  startGroupLiveSession,
+  startGroupLiveSession, updateSessionSettings,
   // Homework
   updateHomework, submitHomework, getGroupHomework,
   getHomeworkSubmissions, checkHomeworkSubmission,
@@ -37,6 +37,7 @@ router.post('/', allowAdminOrTeacher, createSession);
 router.get('/:id', getSessionById);
 router.put('/:id/start', allowAdminOrTeacher, startSession);
 router.put('/:id/end', allowAdminOrTeacher, endSession);
+router.put('/:id/settings', allowAdminOrTeacher, updateSessionSettings);
 router.put('/:id/join', joinSession);
 router.post('/:id/chat', sendChatMessage);
 router.get('/:id/attendees', getAttendees);

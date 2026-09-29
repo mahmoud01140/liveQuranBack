@@ -78,6 +78,10 @@ const liveSessionSchema = new mongoose.Schema({
   lastHeartbeat:   { type: Date },
   isRecorded:   { type: Boolean, default: true },
 
+  // Admin/teacher-controlled: may students turn their cameras on during this session?
+  // Default false preserves the audio-only experience until explicitly allowed.
+  allowStudentVideo: { type: Boolean, default: false },
+
   attendees: [attendeeSchema],
   attendanceRecords: [attendanceRecordSchema],
 
